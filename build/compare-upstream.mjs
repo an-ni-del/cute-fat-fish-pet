@@ -8,6 +8,12 @@
 // A git blob SHA-1 is `sha1("blob <size>\0" + content)`, so we can compute the same value for our local
 // files and compare — no file contents have to be downloaded at all.
 //
+// Line endings: text files are hashed and measured **LF-normalized** (which is what a committed blob
+// weighs), so a Windows checkout with CRLF reports the same numbers as a Linux one, and the tables in
+// docs/differences-from-upstream.md are exactly this output. Binary files are left raw — normalizing
+// them would rewrite real `\r\n` bytes and make every asset look modified. "Text" is decided by git's
+// own heuristic: a NUL byte inside the first 8000 bytes means binary.
+//
 // Usage:
 //   node build/compare-upstream.mjs                       # uses the defaults below
 //   node build/compare-upstream.mjs --tree <tree.json> --prefix dsh-pet/ --local src
@@ -64,6 +70,20 @@ function blobSha1(buf) {
   return h.digest("hex");
 }
 
+// See the "Line endings" note above. `latin1` round-trips every byte value 0-255 unchanged, so only the
+// 0x0d bytes in front of a 0x0a are dropped — nothing else in the file is touched.
+function isText(buf) {
+  const n = Math.min(buf.length, 8000);
+  for (let i = 0; i < n; i++) if (buf[i] === 0) return false;
+  return true;
+}
+
+function prepare(buf) {
+  if (!isText(buf)) return buf;
+  const s = buf.toString("latin1");
+  return s.includes("\r\n") ? Buffer.from(s.replace(/\r\n/g, "\n"), "latin1") : buf;
+}
+
 function walk(dir, base = dir, out = new Map()) {
   for (const name of readdirSync(dir)) {
     const p = join(dir, name);
@@ -92,7 +112,7 @@ if (opt.dir) {
     process.exit(2);
   }
   for (const [rel] of walk(opt.dir)) {
-    const buf = readFileSync(join(opt.dir, rel));
+    const buf = prepare(readFileSync(join(opt.dir, rel)));
     upstream.set(rel, { size: buf.length, sha: blobSha1(buf) });
   }
 } else {
@@ -119,7 +139,7 @@ if (opt.dir) {
 const localSizes = walk(opt.local);
 const local = new Map(); // rel path -> { size, sha }
 for (const [rel] of localSizes) {
-  const buf = readFileSync(join(opt.local, rel));
+  const buf = prepare(readFileSync(join(opt.local, rel)));
   local.set(rel, { size: buf.length, sha: blobSha1(buf) });
 }
 

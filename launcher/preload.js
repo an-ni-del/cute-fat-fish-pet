@@ -33,13 +33,9 @@ contextBridge.exposeInMainWorld("pet", {
 	listApps: () => ipcRenderer.invoke("list-apps"),
 	openTarget: (kind, target) => ipcRenderer.invoke("open-target", { kind, target }),
 
-	// 录屏：软件 / 保存位置 / 起停
-	recGet: () => ipcRenderer.invoke("rec-get"),
-	recDetect: () => ipcRenderer.invoke("rec-detect"),
-	recStatus: () => ipcRenderer.invoke("rec-status"),
-	recSet: (patch) => ipcRenderer.invoke("rec-set", patch),
-	recAction: (action, extra) => ipcRenderer.invoke("rec-action", Object.assign({ action }, extra || {})),
-	recPickDir: () => ipcRenderer.invoke("rec-pick-dir"),
+	// 浏览器 / 搜索偏好（文件名沿用录屏时代的 record.json，现在只存这两项）
+	prefsGet: () => ipcRenderer.invoke("prefs-get"),
+	prefsSet: (patch) => ipcRenderer.invoke("prefs-set", patch),
 
 	// AI agent：让桌宠当前那个模型自己决定怎么动手
 	agent: (text) => ipcRenderer.invoke("agent-run", { text }),
@@ -67,19 +63,6 @@ contextBridge.exposeInMainWorld("pet", {
 		const handler = (_e, r) => fn(r);
 		ipcRenderer.on("detect-done", handler);
 		return () => ipcRenderer.removeListener("detect-done", handler);
-	},
-
-	// 一键更新（1.2.0）：问 GitHub 有没有新版 → 下安装包（边下边校验）→
-	// 关掉这个窗口，交给独立的 PowerShell 静默装回原目录，装完自己开回来
-	updateCheck: () => ipcRenderer.invoke("update-check"),
-	updateDownload: (req) => ipcRenderer.invoke("update-download", req || {}),
-	updateApply: (req) => ipcRenderer.invoke("update-apply", req || {}),
-	updateResult: () => ipcRenderer.invoke("update-result"),
-	updateOpenPage: (url) => ipcRenderer.invoke("update-open-page", url),
-	onUpdateProgress: (fn) => {
-		const handler = (_e, p) => fn(p);
-		ipcRenderer.on("update-progress", handler);
-		return () => ipcRenderer.removeListener("update-progress", handler);
 	},
 
 	openHealth: (port) => ipcRenderer.invoke("open-health", port),

@@ -8,6 +8,14 @@
 *.ps1 text eol=lf
 *.cmd text eol=lf
 
+# 引擎源码与签入的构建产物固定 LF（与上面 *.ps1/*.cmd 同理：让检出字节 = 发布字节）。
+# 为什么必须：lib\*.js 的签入 blob 本来就是 LF（git cat-file -s src/lib/client.js = 137974），
+# src\src\client\bundle-contract.test.ts 的「文件形态」也断言无 \r；而 rolldown 处理 CRLF
+# 源码里的块注释会多吐空行 —— 同一份源码在 CRLF 检出下会构建出不同字节
+# （机理与复现校验见 src\scripts\build-lib.mjs）。
+/src/src/** text eol=lf
+/src/lib/** text eol=lf
+
 # .vbs 是 UTF-16LE + BOM、行尾是 LF，含中文文案（"蓝毛小女仆" 等）。
 # 与 1.0.0 已发布副本逐字节一致，所以按二进制存：对 UTF-16 做行尾转换会把文件写坏。
 *.vbs binary

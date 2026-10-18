@@ -404,29 +404,6 @@
     </div>
   </details>
 
-  <!-- 语音模式 -->
-  <details class="sec">
-    <summary class="sh">语音模式 <span class="tag">麦克风听你说话</span></summary>
-    <div class="field"><span class="lbl"></span><label class="chk"><input type="checkbox" id="voiceOn" /> 开着（开着才会听你说话）</label></div>
-    <div class="field">
-      <span class="lbl">灵敏度</span>
-      <select id="voiceSens">
-        <option value="low">低（要大声点）</option>
-        <option value="mid">中（默认）</option>
-        <option value="high">高（小声也听得见）</option>
-      </select>
-    </div>
-    <div class="field">
-      <span class="lbl">识别语言</span>
-      <select id="voiceLang">
-        <option value="zh">中文（推荐）</option>
-        <option value="auto">自动（噪声多时会猜成韩文 / 日文）</option>
-      </select>
-    </div>
-    <div class="row" style="margin:10px 0 0"><button id="saveVoice">应用语音设置</button><span class="saved" id="savedVoice">已保存</span></div>
-    <div class="hint" id="voiceHint">只在本机转写，不上传、不联网。麦克风设备还是要在右键菜单里挑。</div>
-  </details>
-
   <!-- 她的声音（TTS 音色） -->
   <details class="sec">
     <summary class="sh">她的声音 <span class="tag">音色 / 语速 / 音高 / 音量 · 点一下就能试听</span></summary>
@@ -476,25 +453,9 @@
     <div class="hint" id="ttsHint">试听是用桌宠自己的嗓子念（要先点「启动桌宠」）。音高改完立刻生效；音色 / 语速 / 音量要等她自己的窗口重载一下（一秒内）。</div>
   </details>
 
-  <!-- 录屏 · 浏览器 -->
+  <!-- 浏览器 · 搜索 -->
   <details class="sec">
-    <summary class="sh">录屏 · 浏览器 <span class="tag">用哪个软件 / 存到哪 / 打开哪个网站，交给她自己决定</span></summary>
-    <div class="field">
-      <span class="lbl">录屏软件</span>
-      <select id="recSoft"></select>
-    </div>
-    <div class="field"><span class="lbl">软件路径</span><input type="text" id="recPath" placeholder="一般不用填，自动检测（OBS 会自己找）" /></div>
-    <div class="field">
-      <span class="lbl">保存到</span>
-      <input type="text" id="recDir" placeholder="录像存到哪个文件夹" />
-      <button id="recPick" style="flex:0 0 86px">选文件夹</button>
-    </div>
-    <div class="row" style="margin:8px 0 0">
-      <button id="recStart">开始录</button>
-      <button id="recStop" class="ghost">停止</button>
-      <button id="recOpen" class="ghost">打开软件</button>
-      <button id="recRefresh" class="ghost">重新检测</button>
-    </div>
+    <summary class="sh">浏览器 · 搜索 <span class="tag">用哪个浏览器开网站、搜索用哪家引擎，交给她自己决定</span></summary>
     <div class="field" style="margin-top:10px">
       <span class="lbl">浏览器</span>
       <input type="text" id="recBrowser" placeholder="留空就用系统默认浏览器" />
@@ -506,8 +467,19 @@
         <option value="baidu">百度</option>
       </select>
     </div>
-    <div class="row" style="margin:10px 0 0"><button id="saveRec">保存这些设置</button><span class="saved" id="savedRec">已保存</span><button id="recHelp" class="ghost">她怎么自己动手？</button></div>
-    <div class="hint" id="recHint">选好软件和保存位置就行。你也可以直接对她说「打开B站」「录一段」「录到 D:\\录像 里」—— 她会自己挑工具动手。</div>
+    <div class="row" style="margin:10px 0 0"><button id="saveRec">保存这些设置</button><span class="saved" id="savedRec">已保存</span></div>
+    <div class="hint" id="recHint">对她说「打开B站」就会用这里的浏览器打开。</div>
+  </details>
+
+  <!-- [local patch W2] 今天天气（Open-Meteo 免费源，不用申请 Key） -->
+  <details class="sec">
+    <summary class="sh">今天天气 <span class="tag">Open-Meteo 免费数据源 · 不用申请 Key</span></summary>
+    <div class="field" style="margin-top:10px">
+      <span class="lbl">城市</span>
+      <input type="text" id="weatherCity" placeholder="留空就按网络位置自动定位（比如填：北京）" />
+    </div>
+    <div class="row" style="margin:10px 0 0"><button id="saveWeather">保存城市</button><span class="saved" id="savedWeather">已保存</span></div>
+    <div class="hint" id="weatherHint">右键她 →「今天天气」就能问一次；下雪她会去堆雪人，大热天会摇扇纳凉。</div>
   </details>
 
   <!-- 口令终端 -->
@@ -525,25 +497,11 @@
     </div>
   </div>
 
-  <!-- [update@1] 一键更新（1.2.0）：问 GitHub 有没有新版，有就下下来、关掉窗口静默装回去 -->
-  <div class="sec">
-    <h2>更新 <span class="tag" id="updateTag">还没检查过</span></h2>
-    <div class="row" style="margin:10px 0 0">
-      <button id="checkUpdate" class="ghost">检查更新</button>
-      <button id="doUpdate" disabled>下载并更新</button>
-    </div>
-    <div class="hint" id="updateMsg">点「检查更新」问一下 GitHub 有没有新版本。</div>
-    <div class="hint" id="updateBar" hidden style="margin-top:6px;color:#8bd5a0"></div>
-    <div class="row" style="margin:10px 0 0">
-      <button id="updatePage" class="ghost" hidden>在浏览器里打开发布页</button>
-    </div>
-  </div>
-
   <details class="sec">
     <summary class="sh">还剩这些只能在右键菜单里点</summary>
     <div class="hint" style="margin-top:10px">
-      唱歌 · 走到哪边（14 个方位，也可以直接对她说「到左边去」）· 麦克风设备 · 清理缓存 · 动作菜单（待机 / 转向 / 拖拽 / 点击回应 / 移动）。<br />
-      录屏、打开网站、说话的声音（音色 / 语速 / 音高 / 音量 / 什么时候出声）都已经搬进来了 —— 分别在「录屏 · 浏览器」和「她的声音」那两栏，或者直接在终端里说。原来菜单里那些一行行的注释说明，现在都搬到这个控制台里了 —— 所以右键菜单已经清爽了。
+      唱歌 · 走到哪边（14 个方位，也可以直接对她说「到左边去」）· 清理缓存 · 动作菜单（待机 / 转向 / 拖拽 / 点击回应 / 移动）。<br />
+      说话的声音（音色 / 语速 / 音高 / 音量 / 什么时候出声）已经搬进来了 —— 在「她的声音」那栏，或者直接在终端里说。原来菜单里那些一行行的注释说明，现在都搬到这个控制台里了 —— 所以右键菜单已经清爽了。
     </div>
   </details>
 
@@ -579,7 +537,7 @@ let dirty = false;
 // [主人第 2 条] 她现在的边距（改名字 / 大小 / 开关时沿用，别把人挪回默认位置）
 let lastPos = null;
 
-const PHRASES = ["检测", "监测状态", "换本地", "换在线", "自动择优", "碎碎念模式", "只说高光", "只听我的", "看着点", "别看了", "点评一下", "录屏 开", "录屏 停", "打开B站", "试听"];
+const PHRASES = ["检测", "监测状态", "换本地", "换在线", "自动择优", "碎碎念模式", "只说高光", "只听我的", "看着点", "别看了", "点评一下", "打开B站", "试听"];
 
 function fmtTime(iso) {
   if (!iso) return "—";
@@ -727,14 +685,14 @@ function syncForm(o) {
     $("personaText").value = o.personaText || "";
   }
 
-  // ---- 控制桥：桌宠渲染进程自己的状态（权限 / 活跃度 / 语音）----
+  // ---- 控制桥：桌宠渲染进程自己的状态（权限 / 活跃度）----
   const c = o.control || {};
   const bridgeOk = o.controlOk !== false && Object.keys(c).length > 0;
   const cHint = bridgeOk ? "" : "（控制桥还没连上：桌宠得先跑着，这块才读得到，起来以后会自动好）";
   // 音高不住在她那边（冻结代码里 SSML 写死了 +0Hz），而是数据根里一个小文件 —— 跟控制桥无关，先回填
   if (TTS_PITCHES.includes(o.ttsPitch)) $("ttsPitch").value = o.ttsPitch;
   if (bridgeOk) {
-    const mood = c.mood || {}, talk = c.talk || {}, voice = c.voice || {}, pm = (c.perm && c.perm.perm) || {};
+    const mood = c.mood || {}, talk = c.talk || {}, pm = (c.perm && c.perm.perm) || {};
     $("moodActivity").value = mood.activity || "normal";
     // [主人第 2 条] 键不存在时桌宠那边是「开」（hookAutoTalk 的默认），这里必须跟着——
     //   老版本用 !!talk.on 会显示成没勾，一点「应用」就把主人本来开着的自主说话/导演写成关。
@@ -753,9 +711,6 @@ function syncForm(o) {
     $("permApp").checked = !!pm.app;
     $("permFile").checked = !!pm.file;
     $("permUrl").checked = !!pm.url;
-    $("voiceOn").checked = !!voice.on;
-    $("voiceSens").value = voice.sens || "mid";
-    $("voiceLang").value = voice.lang || "zh";
     const tts = c.tts || {};
     if (TTS_VOICES.some((v) => v[0] === tts.voice)) $("ttsVoice").value = tts.voice;
     if (["-15%", "+0%", "+15%"].includes(tts.rate)) $("ttsRate").value = tts.rate;
@@ -766,6 +721,9 @@ function syncForm(o) {
     $("ttsNotice").checked = tts.notice !== false;
     $("ttsAutotalk").checked = tts.autotalk === true;
     $("ttsSing").checked = tts.sing !== false;
+    // [local patch W2] 天气城市回填（没设过就是空 = 自动定位）
+    const wx = c.weather || {};
+    if (document.activeElement !== $("weatherCity")) $("weatherCity").value = typeof wx.city === "string" ? wx.city : "";
     const logs = (c.perm && c.perm.log) || [];
     const permText = logs.length
       ? "她最近做了什么：" + logs.slice(-6).reverse().map((x) => x.text || "").filter(Boolean).join(" ／ ")
@@ -773,8 +731,9 @@ function syncForm(o) {
     $("permLog").textContent = maskSecrets(permText);
   }
   $("moodHint").textContent = "这几个值住在桌宠自己的窗口里，改完它会重载一下（一秒内）。" + cHint;
-  $("voiceHint").textContent = "只在本机转写，不上传、不联网。麦克风设备还是要去右键菜单里挑。" + cHint;
   $("ttsHint").textContent = "试听是用桌宠自己的嗓子念（要先点「启动桌宠」）。音高改完立刻生效；音色 / 语速 / 音量要等她自己的窗口重载一下（一秒内）。" + cHint;
+  // [local patch W2] 天气提示：带上控制桥状态（保存要走控制桥，她没跑时写不进去）
+  $("weatherHint").textContent = "右键她 →「今天天气」就能问一次；下雪她会去堆雪人，大热天会摇扇纳凉。挂代理时自动定位可能不准，填上城市最稳。" + cHint;
 
   dirty = false;
 }
@@ -1175,8 +1134,7 @@ const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": 
 const CMD_HELP = [
   "帮助 ｜ 状态 ｜ 名字 <新名字>",
   "权限 开|关 软件|文件|网页|全部",
-  "语音 开|关 ｜ 麦克风 低|中|高 ｜ 语言 中文|自动",
-  "音色 晓伊|晓晓|云希|云夏|小北|小妮 ｜ 语速 慢|正常|快 ｜ 音高 低一点|原声(默认)|软萌|更萌 ｜ 音量 小|中|大 ｜ 试听",
+  "音色 晓伊|晓晓|云希|云夏|云扬|云健|小北|小妮|晓曼|晓佳|云龙|晓臻|晓雨|云哲 ｜ 语速 慢|正常|快 ｜ 音高 低一点|原声(默认)|软萌|更萌 ｜ 音量 小|中|大 ｜ 试听",
   "活跃度 安静|正常|活跃|嗨起来",
   "自主说话 开|关 ｜ 导演 开|关",
   "文本模型 跟随|自动择优|共用|<本机模型名>",
@@ -1184,8 +1142,7 @@ const CMD_HELP = [
   "联网 测试 ｜ 大脑 在线|本地|自动 ｜ 监测 开|关",
   "打开 软件|文件|网页 <路径或网址>",
   "检测 ｜ 按推荐设置 ｜ 测速 ｜ 启动 Ollama",
-  "录屏 开|停|状态 ｜ 录屏软件 <名字> ｜ 录屏位置 <文件夹> ｜ 打开录屏软件",
-  "其余的话直接说 —— 会交给她现在的模型，它自己能开网站、挑录屏软件、起停录屏",
+  "其余的话直接说 —— 会交给她现在的模型，它自己能开网站、搜东西、开软件",
 ].join("\n");
 
 const YES = ["开", "开吧", "打开", "启用", "on", "true", "是", "1"];
@@ -1198,7 +1155,14 @@ async function kv(kind) {
 }
 async function putK(kind, value) {
   const r = await window.pet.controlSet(kind, value);
-  if (!r || !r.ok) throw new Error((r && (r.message || r.reason)) || "控制桥写不进去");
+  if (!r || !r.ok) {
+    // no-control-bridge = 她没在跑（配置存在她进程的 localStorage 里，控制桥无处可写）——把
+    // 英文 reason 翻成主人看得懂的动作指引；其它原因照原样透出
+    const msg = r && r.reason === "no-control-bridge"
+      ? "她还没启动，先点上面的「启动萌宠」，等她出现在桌面上再保存"
+      : ((r && (r.message || r.reason)) || "控制桥写不进去");
+    throw new Error(msg);
+  }
   return r;
 }
 async function putMerge(kind, patch) {
@@ -1209,101 +1173,42 @@ async function putMerge(kind, patch) {
 }
 const toBool = (v) => (YES.includes(v) ? true : NO.includes(v) ? false : null);
 
-// ---------------------------------------------------------------- 录屏 · 浏览器
-const REC_KIND_CN = { obs: "OBS（能起停、能改保存位置）", xbox: "Xbox Game Bar（只能帮你按 Win+Alt+R）", psr: "步骤记录器（手动存）", other: "其它（只能替你打开）" };
-const SEP = "\u0001";
-let recList = [];
-
-function recStatusLine(st) {
-  const s = (st && st.software) || {};
-  const bits = [`用的是「${s.name || "还没选"}」`];
-  if (st && st.obsRunning) bits.push(st.recording ? `正在录（${st.timecode || "0"}，${((st.bytes || 0) / 1048576).toFixed(1)} MB）` : "OBS 开着，没在录");
-  else if (st && s.kind === "obs") bits.push("OBS 没开（要录的时候会自己拉起来）");
-  if (st && st.outDir) bits.push(`存到 ${st.outDir}`);
-  if (st && st.error) bits.push("出错了：" + st.error);
-  return bits.join("；") + "。";
-}
-
-function recSelParts() {
-  const [name, path, kind] = String($("recSoft").value || "").split(SEP);
-  return { name: name || "", path: path || "", kind: kind || "other" };
-}
-function recPathFromSel(force) {
-  const p = recSelParts();
-  if (force || document.activeElement !== $("recPath")) $("recPath").value = p.path || "";
-}
-
+// ---------------------------------------------------------------- 浏览器 · 搜索
 async function syncRec(force) {
   let o;
-  try { o = await window.pet.recGet(); } catch (e) { return null; }
+  try { o = await window.pet.prefsGet(); } catch (e) { return null; }
   if (!o || !o.ok) return null;
-  recList = o.recorders || [];
-  const soft = (o.record && o.record.software) || {};
-  const sig = recList.map((x) => x.name + "|" + x.kind + "|" + x.path).join("~") + "@@" + soft.name + "|" + soft.path + "|" + soft.kind;
-  if (force || $("recSoft").dataset.sig !== sig) {
-    $("recSoft").dataset.sig = sig;
-    const sel = $("recSoft");
-    sel.innerHTML = "";
-    const mk = (name, path, kind, label) => {
-      const op = document.createElement("option");
-      op.value = `${name}${SEP}${path || ""}${SEP}${kind || "other"}`;
-      op.textContent = label;
-      sel.appendChild(op);
-    };
-    for (const it of recList) mk(it.name, it.path, it.kind, `${it.name} — ${REC_KIND_CN[it.kind] || "其它"}`);
-    mk(soft.name || "OBS Studio", soft.path || "", soft.kind || "obs", `当前：${soft.name || "OBS Studio"}`);
-    sel.value = `${soft.name || "OBS Studio"}${SEP}${soft.path || ""}${SEP}${soft.kind || "obs"}`;
-  }
-  if (document.activeElement !== $("recDir")) $("recDir").value = o.record.outDir || "";
   if (document.activeElement !== $("recBrowser")) $("recBrowser").value = o.record.browser || "";
   $("recSearch").value = o.record.search === "baidu" ? "baidu" : "bing";
-  recPathFromSel(false);
-  $("recHint").textContent = recStatusLine(o.status) + " 也可以直接对她说「录一段」—— 她自己挑工具。";
+  $("recHint").textContent = "对她说「打开B站」就会用这里的浏览器打开；她帮你搜东西时用上面选的引擎。";
   return o;
 }
 
-async function recAct(action, extra) {
-  log("系统", action === "start" ? "开始录…" : action === "stop" ? "停止录屏…" : action === "open" ? "打开录屏软件…" : "改保存位置…");
-  let r;
-  try { r = await window.pet.recAction(action, extra); } catch (e) { r = { ok: false, message: String((e && e.message) || e) }; }
-  if (action === "start") log("系统", r && r.ok ? (r.already ? "已经在录了" : "开始录了") : "没能开始：" + ((r && r.message) || (r && r.reason) || ""));
-  else if (action === "stop") log("系统", r && r.ok ? `停了，文件在 ${r.path || "（软件自己的目录）"}` : "没停成：" + ((r && r.message) || ""));
-  else if (action === "open") log("系统", r && r.ok ? "已打开：" + (r.opened || "") : "打不开：" + ((r && r.message) || ""));
-  await syncRec(true);
-  return r;
-}
-
-$("recSoft").onchange = () => recPathFromSel(true);
-$("recStart").onclick = () => recAct("start");
-$("recStop").onclick = () => recAct("stop");
-$("recOpen").onclick = () => recAct("open");
-$("recRefresh").onclick = async () => {
-  const o = await syncRec(true);
-  log("系统", "重新检测了一遍：" + ((o && o.recorders) || []).map((x) => x.name).join(" / "));
-};
-$("recPick").onclick = async () => {
-  let r;
-  try { r = await window.pet.recPickDir(); } catch (e) { r = { ok: false, message: String((e && e.message) || e) }; }
-  if (r && r.canceled) return;
-  if (r && r.ok) { $("recDir").value = r.dir || ""; await syncRec(true); log("系统", r.applied ? `保存位置已改成 ${r.dir}` : (r.message || "记下了")); }
-  else log("系统", "选文件夹失败：" + ((r && r.message) || ""));
-};
 $("saveRec").onclick = async () => {
-  const p = recSelParts();
   const patch = {
-    software: { name: p.name, path: $("recPath").value.trim() || p.path, kind: p.kind },
-    outDir: $("recDir").value.trim(),
     browser: $("recBrowser").value.trim(),
     search: $("recSearch").value,
   };
-  const r = await window.pet.recSet(patch);
+  const r = await window.pet.prefsSet(patch);
   flash("savedRec", r && r.ok ? "已保存" : "失败", !(r && r.ok));
-  if (r && r.ok) { dirty = false; await syncRec(true); log("系统", `录屏软件＝${p.name}；保存位置＝${patch.outDir || "（软件自己的）"}；浏览器＝${patch.browser || "系统默认"}；搜索＝${patch.search}`); }
+  if (r && r.ok) { dirty = false; await syncRec(true); log("系统", `浏览器＝${patch.browser || "系统默认"}；搜索＝${patch.search}`); }
   else log("系统", "保存失败：" + ((r && r.message) || ""));
 };
-$("recHelp").onclick = () => {
-  log("系统", "她怎么自己动手：你在终端里说一句人话（比如「打开B站」「录一段」「录到 D:\\录像 里」），这句话会交给她现在用的那个模型（本地 / 联网 / 自动择优，跟「AI 大脑」那一栏一致）。模型回一个工具调用——开网址 / 搜索 / 列录屏软件 / 挑录屏软件 / 起停录屏 / 改保存位置 / 开软件 / 说话——控制台照着做完，再把结果喂回模型，直到它说 done。要动手的动作都会先看「权限 · 打开东西」那三个开关。");
-  log("系统", "挑模型的门道：本机 qwen3:4b 是「思考型」，会先想几百个字才写正文，这台机器上每秒只出 2–4 个字，一个动作可能要等好几分钟（所以她常常想一半就被掐断）。本机 qwen2.5vl:3b 每秒能出 40 多个字、不想就直接写，十来秒就动完手；填了联网模型并切到「在线」则更快。");
+
+// ---------------------------------------------------------------- [local patch W2] 今天天气
+$("saveWeather").onclick = async () => {
+  const city = $("weatherCity").value.trim();
+  try {
+    // reload=false：城市只在点「今天天气」那一刻才读，不值得为她整个窗口刷新一遍
+    const r = await window.pet.controlSet("weather", { city }, false);
+    if (!r || !r.ok) throw new Error((r && (r.message || r.reason)) || "控制桥写不进去");
+    flash("savedWeather", "已保存");
+    dirty = false;
+    log("系统", `天气城市＝${city || "自动定位"}`);
+  } catch (e) {
+    flash("savedWeather", "保存失败", true);
+    log("系统", "保存失败：" + (e && e.message ? e.message : String(e)));
+  }
 };
 
 async function runLocal(s) {
@@ -1359,24 +1264,6 @@ async function runLocal(s) {
         log: cur.log || [],
       });
       return answer("权限更新：" + Object.keys(patch).map((k) => KIND_CN[k] + (patch[k] ? "＝开" : "＝关")).join("，"));
-    }
-    if (w === "语音") {
-      const on = toBool(arg);
-      if (on === null) return answer("用法：语音 开 ／ 语音 关");
-      await putMerge("voice", { on });
-      return answer(on ? "语音模式开了，她开始听你说话（只在本机转写，不联网）。" : "语音模式关了。");
-    }
-    if (["麦克风", "灵敏度"].includes(w)) {
-      const v = /低|low/i.test(arg) ? "low" : /高|high/i.test(arg) ? "high" : /中|mid/i.test(arg) ? "mid" : null;
-      if (!v) return answer("用法：麦克风 低 ／ 中 ／ 高");
-      await putMerge("voice", { sens: v });
-      return answer("麦克风灵敏度＝" + { low: "低", mid: "中", high: "高" }[v]);
-    }
-    if (w === "语言") {
-      const v = /自动|auto/i.test(arg) ? "auto" : /中|zh/i.test(arg) ? "zh" : null;
-      if (!v) return answer("用法：语言 中文 ／ 语言 自动");
-      await putMerge("voice", { lang: v });
-      return answer("识别语言＝" + (v === "zh" ? "中文" : "自动"));
     }
     if (["音色", "声音"].includes(w)) {
       const hit = TTS_VOICES.find((v) => arg && (arg.includes(v[1].split(" ")[0]) || arg.toLowerCase() === v[0].toLowerCase()));
@@ -1489,42 +1376,6 @@ async function runLocal(s) {
       await doProbe();
       return true;
     }
-    if (["录屏", "录制"].includes(w)) {
-      const a = arg.trim();
-      if (!a || /状态|status|好了没/i.test(a)) {
-        const st = await window.pet.recStatus();
-        return answer(recStatusLine(st));
-      }
-      if (/^(开|开始|录|start)/i.test(a)) {
-        const r = await recAct("start");
-        return answer(r && r.ok ? (r.already ? "已经在录了。" : "开始录了。") : "没能开始：" + ((r && r.message) || ""));
-      }
-      if (/^(停|停止|结束|别录|stop)/i.test(a)) {
-        const r = await recAct("stop");
-        return answer(r && r.ok ? `停了，文件在 ${r.path || "（软件自己的目录）"}` : "没停成：" + ((r && r.message) || ""));
-      }
-      return answer("用法：录屏 开 ／ 录屏 停 ／ 录屏 状态");
-    }
-    if (["录屏软件", "录制软件"].includes(w)) {
-      const det = await window.pet.recDetect();
-      const list = (det && det.list) || [];
-      if (!arg) return answer("检测到：" + list.map((x) => `${x.name}（${x.kind}）`).join(" / ") + "。用法：录屏软件 OBS Studio");
-      const key = arg.toLowerCase();
-      const hit = list.find((x) => x.name.toLowerCase().includes(key) || key.includes(x.name.toLowerCase().split(" ")[0]));
-      if (!hit) return answer(`没找到叫「${arg}」的录屏软件。检测到的是：` + list.map((x) => x.name).join(" / "));
-      await window.pet.recSet({ software: { name: hit.name, path: hit.path, kind: hit.kind } });
-      await syncRec(true);
-      return answer(`录屏软件＝${hit.name}（${REC_KIND_CN[hit.kind] || hit.kind}）`);
-    }
-    if (["录屏位置", "录像位置", "录像目录", "录像存哪"].includes(w)) {
-      if (!arg) return answer("用法：录屏位置 D:\\录像");
-      const r = await recAct("dir", { dir: arg });
-      return answer((r && r.message) || "记下了");
-    }
-    if (["打开录屏软件", "开录屏软件"].includes(w)) {
-      const r = await recAct("open");
-      return answer(r && r.ok ? "已打开：" + (r.opened || "") : "打不开：" + ((r && r.message) || ""));
-    }
     if (w === "打开") {
       const mm = arg.match(/^(软件|应用|程序|文件|文件夹|网页|网址)\s*([\s\S]+)$/);
       if (!mm) return answer("用法：打开 网页 www.baidu.com ／ 打开 文件 D:\\somewhere ／ 打开 软件 路径.exe");
@@ -1544,8 +1395,7 @@ async function runLocal(s) {
 }
 
 const TOOL_CN = {
-  list_recorders: "看了有哪些录屏软件", use_recorder: "挑好录屏软件", open_recorder: "打开录屏软件",
-  record: "录屏", record_dir: "改保存位置", list_apps: "翻了一遍开始菜单", open_app: "打开软件",
+  list_apps: "翻了一遍开始菜单", open_app: "打开软件",
   open_file: "打开文件", open_url: "打开网址", search: "搜索", speak: "说了一句话", done: "收尾",
 };
 function stepLine(st) {
@@ -1553,9 +1403,7 @@ function stepLine(st) {
   const extra =
     st.tool === "open_url" || st.tool === "open_file" ? a.url || a.path || "" :
     st.tool === "search" ? a.q || "" :
-    st.tool === "record" ? a.action || "" :
-    st.tool === "record_dir" ? a.dir || "" :
-    st.tool === "open_app" || st.tool === "use_recorder" ? a.name || "" : "";
+    st.tool === "open_app" ? a.name || "" : "";
   const ok = !(st.result && st.result.ok === false);
   const why = ok ? "" : " ✗ " + ((st.result && (st.result.message || st.result.reason)) || "");
   return `${TOOL_CN[st.tool] || st.tool}${extra ? "：" + extra : ""}（${st.ms || 0}ms）${ok ? "" : why}`;
@@ -1810,16 +1658,6 @@ $("appList").onclick = async () => {
   log("系统", apps.length ? `找到 ${apps.length} 个（在开始菜单里的），点一个就填进上面的框。` : "开始菜单里没找到可执行的东西。");
 };
 
-// ---------------------------------------------------------------- 语音模式
-$("saveVoice").onclick = async () => {
-  try {
-    await putMerge("voice", { on: $("voiceOn").checked, sens: $("voiceSens").value, lang: $("voiceLang").value });
-    flash("savedVoice", "已保存");
-    log("系统", "语音设置已写入她自己那边（她自己的窗口刚重载了一下）。");
-    await reload(true);
-  } catch (e) { flash("savedVoice", "失败", true); log("系统", "改不动：" + e.message); }
-};
-
 // ---------------------------------------------------------------- 她的声音（TTS 音色）
 // 这几组值必须跟桌宠渲染端 ttsVoiceTable / ttsRateTable / ttsVolTable **一模一样**：
 // 她那边的 ttsConfig() 会逐个白名单校验，给了表外的值会被静默换成默认值（等于白改）。
@@ -1828,8 +1666,16 @@ const TTS_VOICES = [
   ["zh-CN-XiaoxiaoNeural", "晓晓 · 温柔"],
   ["zh-CN-YunxiNeural", "云希 · 男声 · 阳光"],
   ["zh-CN-YunxiaNeural", "云夏 · 男声 · 可爱"],
+  ["zh-CN-YunyangNeural", "云扬 · 男声 · 新闻播音"],
+  ["zh-CN-YunjianNeural", "云健 · 男声 · 激情解说"],
   ["zh-CN-liaoning-XiaobeiNeural", "小北 · 东北话"],
   ["zh-CN-shaanxi-XiaoniNeural", "小妮 · 陕西话"],
+  ["zh-HK-HiuMaanNeural", "晓曼 · 粤语 · 女"],
+  ["zh-HK-HiuGaaiNeural", "晓佳 · 粤语 · 女"],
+  ["zh-HK-WanLungNeural", "云龙 · 粤语 · 男"],
+  ["zh-TW-HsiaoChenNeural", "晓臻 · 台湾腔 · 女"],
+  ["zh-TW-HsiaoYuNeural", "晓雨 · 台湾腔 · 女"],
+  ["zh-TW-YunJheNeural", "云哲 · 台湾腔 · 男"],
 ];
 // 音高档位：跟 app 里 ttsPitchFromConfig() 的规则一致（±80Hz 以内，认不出来当 +0Hz）
 const TTS_PITCHES = ["-15Hz", "+0Hz", "+30Hz", "+45Hz"];
@@ -1888,150 +1734,6 @@ $("ttsTry").onclick = async () => {
   } catch (e) { log("系统", "试听没成功：" + e.message); }
 };
 
-// ---------------------------------------------------------------- 一键更新
-// [update@1] 检查 → 下载（边下边校验）→ 关掉窗口交给独立脚本静默装回原目录 → 下次打开回读结果。
-//   这里只管把话说清楚、别让主人重复点；真正的安装是主进程写出来的 apply-update.ps1 干的。
-let updateInfo = null;   // 上次「检查更新」的结果
-let updateBusy = false;  // 正在检查 / 下载 / 交班
-
-function updateSay(text, cls) {
-  const el = $("updateMsg");
-  el.textContent = text == null ? "" : String(text);
-  el.style.color = cls === "err" ? "#f2b8b8" : cls === "ok" ? "#8bd5a0" : "";
-}
-
-function updateProgressText(p) {
-  if (!p) return "";
-  const size = p.totalMb ? `${p.mb} / ${p.totalMb}` : String(p.mb || "");
-  const pct = p.percent ? `（${p.percent}%）` : "";
-  const speed = p.speed ? ` · ${p.speed} MB/s` : "";
-  return `正在下载 ${size}${pct}${speed}`;
-}
-
-function updateUnlock() {
-  updateBusy = false;
-  $("checkUpdate").disabled = false;
-}
-
-function renderUpdate() {
-  const r = updateInfo;
-  const cur = (r && r.current) || (appMeta && appMeta.version) || "?";
-  const btn = $("doUpdate");
-  if (!r) {
-    $("updateTag").textContent = "还没检查过";
-    updateSay("点「检查更新」问一下 GitHub 有没有新版本。");
-    btn.disabled = true;
-    return;
-  }
-  if (!r.ok) {
-    $("updateTag").textContent = `当前 ${cur}`;
-    updateSay(r.message || "检查更新没成功。", "err");
-    btn.disabled = true;
-    $("updatePage").hidden = false;
-    return;
-  }
-  if (!r.hasUpdate) {
-    $("updateTag").textContent = `当前 ${cur} · 已是最新`;
-    updateSay(`已经是最新版啦（${cur}${r.publishedAt ? "，" + fmtTime(r.publishedAt) + " 发布" : ""}）。`);
-    btn.disabled = true;
-    return;
-  }
-  const mb = r.exe && r.exe.size ? `（约 ${(r.exe.size / 1024 / 1024).toFixed(1)} MB）` : "";
-  $("updateTag").textContent = `当前 ${cur} → 新版 ${r.latest}`;
-  if (!r.installed) {
-    updateSay(`有新版 ${r.latest}${mb}，但这份是源码运行、没有 electron\\electron.exe —— 更新请自己 git pull。`, "err");
-    btn.disabled = true;
-    $("updatePage").hidden = false;
-    return;
-  }
-  if (!r.exe || !r.exe.sha256) {
-    $("updateTag").textContent = `当前 ${cur} → 新版 ${r.latest}`;
-    updateSay(`有新版 ${r.latest}${mb}，但发布里没给安装包的 SHA-256，为安全起见不自动装 —— 去发布页手动下吧。`, "err");
-    btn.disabled = true;
-    $("updatePage").hidden = false;
-    return;
-  }
-  $("updatePage").hidden = true;
-  updateSay(`有新版 ${r.latest}${mb}。点「下载并更新」：下完这个窗口会自己关掉，装好再开回来（两三分钟，中途别关机）。`);
-  btn.disabled = false;
-}
-
-async function checkUpdate() {
-  if (updateBusy) return;
-  updateBusy = true;
-  $("checkUpdate").disabled = true;
-  $("doUpdate").disabled = true;
-  $("updateBar").hidden = true;
-  updateSay("正在问 GitHub……");
-  try {
-    updateInfo = await window.pet.updateCheck();
-  } catch (e) {
-    updateInfo = { ok: false, message: "检查更新出错：" + ((e && e.message) || e) };
-  }
-  updateUnlock();
-  renderUpdate();
-  if (updateInfo && updateInfo.ok && updateInfo.hasUpdate) log("系统", `检查更新：有新版 ${updateInfo.latest}（现在是 ${updateInfo.current || "?"}）`);
-}
-
-async function doUpdate() {
-  const r = updateInfo;
-  if (!r || !r.ok || !r.exe || r.hasUpdate === false) return;
-  if (updateBusy) return;
-  updateBusy = true;
-  $("checkUpdate").disabled = true;
-  $("doUpdate").disabled = true;
-  const bar = $("updateBar");
-  bar.hidden = false;
-  bar.textContent = "准备下载……";
-  log("系统", `开始更新：${r.current || "?"} → ${r.latest}（只从 GitHub 官方发布页下，下完会核对 SHA-256）`);
-  try {
-    const d = await window.pet.updateDownload({ exe: r.exe });
-    if (!d || !d.ok) {
-      bar.hidden = true;
-      updateSay((d && d.message) || "下载失败。", "err");
-      log("系统", "更新没成：" + ((d && d.message) || "下载失败"));
-      updateUnlock();
-      $("doUpdate").disabled = false;
-      return;
-    }
-    bar.textContent = d.cached
-      ? "之前已经下好过、哈希也对，直接用它。"
-      : `下好了（${(d.size / 1024 / 1024).toFixed(1)} MB，${d.elapsedSec} 秒，SHA-256 校验通过）。`;
-    log("系统", "安装包下好并校验通过，准备静默安装：" + r.latest);
-    const a = await window.pet.updateApply({ path: d.path, to: r.latest });
-    if (!a || !a.ok) {
-      updateSay((a && a.message) || "起不了安装脚本。", "err");
-      log("系统", "更新没成：" + ((a && a.message) || "起不了安装脚本"));
-      updateUnlock();
-      $("doUpdate").disabled = false;
-      return;
-    }
-    updateSay(`马上关掉窗口开始装 ${r.latest}…… 装好会自动开回来，稍等一下就好。`, "ok");
-    bar.textContent = "窗口马上自己关掉 —— 别以为它崩了，装完就回来。";
-  } catch (e) {
-    bar.hidden = true;
-    updateSay("更新出错：" + ((e && e.message) || e), "err");
-    updateUnlock();
-    $("doUpdate").disabled = false;
-  }
-}
-
-/** 上次更新装成了没有：不靠脚本自报，用「现在这个版本号 ≥ 要装的版本」判定 */
-async function showUpdateResult() {
-  let r = null;
-  try { r = await window.pet.updateResult(); } catch { return; }
-  if (!r) return;
-  if (r.landed) {
-    $("updateTag").textContent = `当前 ${r.current || "?"} · 刚更新过`;
-    updateSay(`上次更新成功：已经升到 ${r.current} 了（${r.from || "?"} → ${r.to}）。`, "ok");
-    log("系统", `上次更新成功：${r.from || "?"} → ${r.to}，现在跑的是 ${r.current}。`);
-  } else {
-    $("updateTag").textContent = `当前 ${r.current || "?"} · 上次更新没成`;
-    updateSay(`上次更新没成功（想装 ${r.to}，现在还是 ${r.current}）。可以再点一次「下载并更新」；日志：${r.log || "更新目录里"}`, "err");
-    log("系统", `上次更新没成功：想装 ${r.to}，现在还是 ${r.current}。日志在 ${r.log || "更新目录"}`);
-  }
-}
-
 // ---------------------------------------------------------------- 本机适配按钮
 $("detectBtn").onclick = () => { doDetect(false); };
 $("applyBtn").onclick = () => { doDetect(true); };
@@ -2050,17 +1752,6 @@ for (const id of SECRET_FIELDS) {
     el.dataset.shown = el.dataset.shown === "1" ? "0" : "1";
     applySecretVisibility();
   };
-}
-
-// [update@1] 一键更新：两个按钮 + 下载进度 + 上次结果
-$("checkUpdate").onclick = () => { checkUpdate(); };
-$("doUpdate").onclick = () => { doUpdate(); };
-$("updatePage").onclick = () => { window.pet.updateOpenPage(updateInfo && updateInfo.page); };
-if (window.pet.onUpdateProgress) {
-  window.pet.onUpdateProgress((p) => {
-    const t = updateProgressText(p);
-    if (t) { $("updateBar").hidden = false; $("updateBar").textContent = t; }
-  });
 }
 
 // [主人第 2 条] 有些口令只是给主人看的短标签，真正发出去的是完整写法。
@@ -2246,8 +1937,6 @@ document.addEventListener("click", (e) => {
     }
   } catch (e) { log("系统", "读不到程序目录信息：" + (e && e.message ? e.message : String(e))); }
   log("系统", "控制台就绪。上面所有开关都是直接改桌宠自己的配置，桌宠不用重启。");
-  // [update@1] 上次点过「下载并更新」的话，这里如实报一句装成了没有
-  try { await showUpdateResult(); } catch { /* 无所谓 */ }
 })();
 </script>
 </body>

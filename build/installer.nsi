@@ -124,9 +124,13 @@ locked:
 notrunning:
 
   ; 1) 铺文件（脚本版安装器不进安装目录 —— 这里有 Uninstall.exe，用不着它们）
+  ;    额外排除本机运行时文件：online.json 含用户自己填的 API Key（联网模型配置，
+  ;    跑 stage 版时在控制台保存生成）；data-root.txt / portable.txt 是开发期
+  ;    数据目录隔离开关 —— 这三样进了安装包要么泄密、要么改变用户的数据目录行为。
+  ;    首次安装的模型配置由控制台自动检测生成，不依赖这些文件。
   DetailPrint "正在复制文件（约 765 MB，机械硬盘要一两分钟）……"
   SetOutPath "$INSTDIR"
-  File /r /x "install.ps1" /x "uninstall.ps1" /x "安装.cmd" /x "卸载.cmd" "${STAGE}\*"
+  File /r /x "install.ps1" /x "uninstall.ps1" /x "安装.cmd" /x "卸载.cmd" /x "online.json" /x "data-root.txt" /x "portable.txt" "${STAGE}\*"
 
   ; 2) 快捷方式（桌面 + 开始菜单）
   DetailPrint "正在创建快捷方式……"

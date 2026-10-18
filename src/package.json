@@ -33,7 +33,7 @@
     "scripts.ensure:electron —— 自动下载 Electron（装到没预装 Electron 的机器时用）",
     "scripts.test —— 单元素测试（用 node 自带的类型擦除，不需要额外依赖）。已知：上游的 routes / work-status-lifecycle / displays 三个文件要 DSH 宿主包（@deepseek-ai/*），本仓库不带，会报 ERR_MODULE_NOT_FOUND；host-liveness 里有 2 条断言查上游构建脚本（scripts/start-desktop.mjs、scripts/prepack-check.js），本仓库没有这两个文件。其余文件应全绿。",
     "peerDependencies —— 运行时由宿主（DSH）提供的模块，本包不打包它们",
-    "上游的构建/发布流水线（tsdown、prepare、prepack、typecheck、lint）不随本仓库分发：本仓库的构建入口在仓库根的 package.json（build/build.mjs 等）",
+    "上游的构建/发布流水线（prepare、prepack、typecheck、lint）不随本仓库分发；tsdown 构建链是本仓库自建的：src/tsdown.config.ts + src/scripts/build-lib.mjs（npm run build:lib / build:lib:check），只负责复现 lib/client.js —— lib/index.js 上还压着 21 条只用 JS 打的本地补丁，拿 TS 覆盖它等于删功能（详见 docs/differences-from-upstream.md）。整机打包入口仍在仓库根的 package.json（build/build.mjs 等）",
     "================================================"
   ],
   "type": "module",
@@ -65,6 +65,8 @@
   ],
   "scripts": {
     "ensure:electron": "node scripts/ensure-electron.mjs",
+    "build:lib": "node scripts/build-lib.mjs",
+    "build:lib:check": "node scripts/build-lib.mjs --check",
     "test": "node --test \"src/**/*.test.ts\""
   },
   "license": "MIT",

@@ -6,12 +6,16 @@
 *.zip
 *.sha256
 
-# ---- 三块外部运行时（electron / node / speech，合起来约 690 MB）----
+# ---- 一块外部运行时（electron，约 347 MB）----
 # 仓库里只有定位脚本 build\toolchain.mjs，用 --toolchain 或环境变量指到别处。
 # 注意：这里**不能**写裸的 node_modules/ —— src\node_modules\ 是应用本体的一部分，必须入库。
+# 下面这条是**根锚定**的（前导 /）：只忽略仓库根的 node_modules/，src\node_modules\ 不受影响。
+# 根 node_modules/ 是 `npm install` 的工作区提升产物（workspaces: ["src"] 会把 src 的依赖提到根），
+# 它不是源码 —— 而且那次 install 会把 src\node_modules\ 里的同名包搬空（本仓库曾因此少掉 348 个入库文件）。
+/node_modules/
+# 同一次「在仓库根误跑 npm install」留下的锁文件，同理不进仓库（根锚定，不影响 src 下同名文件）。
+/package-lock.json
 /electron/
-/node/
-/speech/
 
 # ---- 构建 / 测试的临时物（NSIS 与临时草稿目录都走这几条）----
 /_*/

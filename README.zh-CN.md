@@ -4,7 +4,7 @@
 
 **一只免费、开源的 Windows 桌面小桌宠——透明、会自己动、能陪你聊天。**
 
-会自己待机、走动、做小动作；能陪你聊天、看一眼你的屏幕说两句；你让她动手，她还能打开软件 / 文件 / 文件夹 / 网页，或者替你起一段录屏。
+会自己待机、走动、做小动作；能陪你聊天、看一眼你的屏幕说两句；你让她动手，她还能打开软件 / 文件 / 文件夹 / 网页。
 
 ![她有 106 个手绘动画](docs/images/demo.gif)
 
@@ -29,7 +29,7 @@
 
 > **关于名字**：蓝毛小女仆 是产品名。仓库名与 npm 包名沿用的仍是标识符 **`cute-fat-fish-pet`**，已经发出去的安装器显示的还是旧名 **「可爱大肥鱼桌宠」** —— 改这些会让已装的用户、桌面快捷方式和下载链接全部断掉，所以保持原样。在下一次重新打包之前，Windows 的桌面快捷方式和「设置 → 应用」里显示的仍是「可爱大肥鱼桌宠」。
 
-上游发布的 `dsh-pet@0.3.0` 安装包里共有 243 个文件，其中 **232 个与本仓库逐字节相同，11 个是刻意改过的**（每个都带大小与原因，见 [docs/differences-from-upstream.md](docs/differences-from-upstream.md)），**没有删掉上游任何文件**；另外有 3 个引擎文件是本项目自己加的（`runtime/electron-helper/obs-ctl.js`、`stt-worker.mjs`、`targets.js`）。其余部分（控制台、独立运行器、构建链、安装器、文档）都是本项目自己的东西。
+上游发布的 `dsh-pet@0.3.0` 安装包里共有 243 个文件，其中 **225 个与本仓库逐字节相同，18 个是刻意改过的**（每个都带大小与原因，见 [docs/differences-from-upstream.md](docs/differences-from-upstream.md)），**没有删掉上游任何文件**；另外有引擎文件是本项目自己加的（`runtime/electron-helper/targets.js` 等；录屏通道 `obs-ctl.js` 曾在此列，随录屏功能一起移除了）。其余部分（控制台、独立运行器、构建链、安装器、文档）都是本项目自己的东西。
 
 ### 关于内部标识：故意保留 `BlueHairMaid`
 
@@ -56,9 +56,9 @@
 - **陪聊**：点她说话，气泡 + 聊天窗；本机模型（Ollama）或联网模型（OpenAI 兼容接口）都行，控制台里三档切换——**本机 / 自动择优 / 联网**。
 - **看屏幕**（可关）：定时截一张图交给视觉模型，她点评两句；没配视觉模型时这条路直接不启用，而不是随便找张图糊弄。
 - **碎碎念与主动说话**：她在没事的时候会自己冒泡，也能被工作状态驱动（任务开始 / 结束 / 出错）。
-- **能动手（你说了算）**：打开软件 / 文件 / 文件夹 / 网页；录屏交给 OBS 或你指定的软件，存到你指定的位置。三个权限开关随时关掉，关掉她就真的不动。
-- **语音**：语音输入走包内的 sherpa-onnx + SenseVoice int8（离线，不需要联网）；说话用 Edge TTS + SSML，语速 / 音高能调，音高存在数据根里。
-- **单 HTML 控制台**：开 / 关 / 看状态、模型与 AI 大脑、语音、权限、录屏、日志，都在一个窗口里，不用命令行。
+- **能动手（你说了算）**：打开软件 / 文件 / 文件夹 / 网页。三个权限开关随时关掉，关掉她就真的不动。
+- **语音**：说话用 Edge TTS + SSML，语速 / 音高能调，音高存在数据根里。
+- **单 HTML 控制台**：开 / 关 / 看状态、模型与 AI 大脑、语音、权限、日志，都在一个窗口里，不用命令行。
 - **人设与记忆**：人设文件、聊天记录、屏幕监测状态都在数据根里，可以自己改、可以整份备份。
 
 ![右键菜单](docs/images/menu.png)
@@ -77,7 +77,7 @@
 
 - 默认装到 `%LOCALAPPDATA%\BlueHairMaid`——**不需要管理员权限**。
 - 想装到别处（D 盘 / 移动硬盘）就在「选择安装位置」那一步改；装完会建开始菜单项和桌面快捷方式。
-- 包里自带 Electron 运行时、语音引擎与模型、语音识别要用的真 `node.exe`，装完就是**离线可用**的。
+- 包里自带 Electron 运行时，装完就能直接用。
 
 ![安装界面](docs/images/installer.png)
 
@@ -112,7 +112,7 @@ dsh plugin --profile web add ./cute-fat-fish-pet/src
 
 `src/lib/` 是预构建入库的，这一步不需要编译。仓库已带 `dsh-plugin` topic，并已提交到 [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 目录的 *Just for Fun* 分类——`dshmarket` 与 `awesome-dsh-plugin.com` 读的是这个目录，而 [dshfind](https://dshfind.com) 则直接镜像所有带该 topic 的仓库。
 
-这一半是独立版的**子集**：106 个动画、桌面漫步、点击反应、经本机 **Ollama** 或 DSH 在线模型陪聊、可选看屏幕都在。**不包含**离线语音识别、Edge TTS 语音和控制台窗口——那些在安装器和 zip 里。
+这一半是独立版的**子集**：106 个动画、桌面漫步、点击反应、经本机 **Ollama** 或 DSH 在线模型陪聊、可选看屏幕都在。**不包含** Edge TTS 语音和控制台窗口——那些在安装器和 zip 里。
 
 ### 每个包都带 `.sha256`
 
@@ -130,20 +130,13 @@ Get-FileHash .\cute-fat-fish-pet-1.2.1-setup.exe -Algorithm SHA256
 - **开**：双击桌面「可爱大肥鱼桌宠」打开**控制台**，在控制台里点「启动桌宠」。
   注意：**控制台不会自动把她拉起来**——这是故意的，省得你只是想改个设置，她就先跳出来。
 - **关**：控制台里点停止，或双击 `standalone\stop-pet.vbs`。
-- **开机自启目前没做**，需要的话自己把控制台快捷方式丢进「启动」文件夹。**更新不用手动下了**：控制台里
-  「更新」→「检查更新」→「下载并更新」会自己下载、核对哈希、关掉自己装好再开回来（见 [怎么升级](#以后怎么升级)）。
+- **开机自启目前没做**，需要的话自己把控制台快捷方式丢进「启动」文件夹。更新就是下载新安装包、覆盖装回旧目录（见 [怎么升级](#以后怎么升级)）。
 - **卸载**：控制面板 / 设置里的「可爱大肥鱼桌宠」，或安装目录里的 `卸载.cmd`。
   卸载**不会**删你的数据（人设、记忆、聊天记录都留着），想彻底清干净就自己删数据目录（见下一节）。
 
 ### 以后怎么升级
 
-**从 1.2.0 起，一键就行**：打开控制台 →「更新」→「检查更新」，看到新版再点「下载并更新」。
-（1.1.4 及更早没有这个按钮，按下面第 2 条手动升一次就有了。）
-它会自己把安装包下到数据目录的 `updates\`、一边下一边核对 SHA-256，然后**关掉自己**、静默装回同一个目录，
-最后把桌宠（本来在跑的话）和控制台自己开回来；装完顺手删掉那 347 MB 的安装包，结果下次启动会如实报给你。
-发布里没给哈希、或者哈希对不上，它宁可不装；从源码目录跑（git clone）也不会走这条路，自己 `git pull`。
-
-**手动（更早的版本，或者控制台连不上 GitHub 时）：**
+更新就是下载新安装包、覆盖装回旧目录。只替换程序文件，不动你的数据：
 
 1. **先把她关掉**：托盘图标右键 → 退出，或双击 `standalone\stop-pet.vbs`。
    安装器故意不杀进程（免得误杀同一台电脑上**另外一只**桌宠），她还在跑的时候它会停下来，让你先关掉再继续。
@@ -151,11 +144,11 @@ Get-FileHash .\cute-fat-fish-pet-1.2.1-setup.exe -Algorithm SHA256
 3. **双击安装、一路「下一步」**：安装器会从 `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\BlueHairMaid` 读出上一版装在哪个目录，**装回同一个目录**，不会多出一份 761 MB 的副本；桌面与开始菜单快捷方式会重建。
 4. **从控制台重新启动她**。
 
-什么会留下：人设、记忆、聊天记录、设置与模型配置都在数据目录 `%APPDATA%\BlueHairMaid` 里，安装器（和上面那个一键更新）一个字节都不碰。
+什么会留下：人设、记忆、聊天记录、设置与模型配置都在数据目录 `%APPDATA%\BlueHairMaid` 里，安装器一个字节都不碰。
 
-绿色 zip 用户：一键更新同样能用，但那 4 个便携脚本（`安装.cmd`/`卸载.cmd`/`install.ps1`/`uninstall.ps1`）更新后会被删掉，卸载改由新登记的卸载项负责；也可以照旧把新 zip 解压覆盖旧目录，自己加的 `standalone\online.json`（联网模型设置）和 `portable.txt` 留着。
+绿色 zip 用户：把新 zip 解压覆盖旧目录即可，自己加的 `standalone\online.json`（联网模型设置）和 `portable.txt` 留着。
 
-> 脚本安装：`cute-fat-fish-pet-setup.exe /S /D=D:\要装的目录`。两点注意——静默模式**不会**自动认旧目录，`/D=` 得自己给（控制台的一键更新会先写 `HKCU\Software\BlueHairMaid\InstallDir`，所以它认得）；她还在跑的时候它同样不会替换文件。
+> 脚本安装：`cute-fat-fish-pet-setup.exe /S /D=D:\要装的目录`。两点注意——静默模式**不会**自动认旧目录，`/D=` 得自己给；她还在跑的时候它同样不会替换文件。
 
 ---
 
@@ -188,7 +181,7 @@ Get-FileHash .\cute-fat-fish-pet-1.2.1-setup.exe -Algorithm SHA256
 ├─ dsh-pet\
 │  ├─ main-config.json          人设 + 宠物列表
 │  ├─ screen-watch\state.json   看屏幕的配置与状态、大脑档位、本机模型
-│  ├─ record.json               录屏设置（录哪个软件、存哪）
+│  ├─ record.json               浏览器 / 搜索引擎偏好（文件名沿用旧版）
 │  ├─ tts-pitch.txt             音高（默认 +0Hz）
 │  └─ main-animation\           你自己的动画素材（有就优先用）
 ├─ device-profile.json          第一次运行自动适配的结果
@@ -204,7 +197,6 @@ Get-FileHash .\cute-fat-fish-pet-1.2.1-setup.exe -Algorithm SHA256
 ### 隐私
 
 - **看屏幕**是**本机截图 → 交给你自己选的那个模型**。选本机 Ollama 就完全不出机器；选联网模型才会把图发到你填的那个接口去。不想用就在控制台关掉，关掉就不截。
-- **语音识别离线跑**：sherpa-onnx + SenseVoice int8 模型在包里，不联网。
 - **Edge TTS 要联网**（用的是微软的在线语音合成）。
 - **联网模型的 API Key 是明文**存在 `standalone\online.json`（程序目录里，跟 1.0.0 一样）。它是本机文件、只给你自己看，但别把这台机器的这个文件发给别人，也别把带 Key 的目录整个打包上传。
 - **她不会自己往外发东西**：没有遥测、没有「回家」的统计上报；只有你打开的联网功能（联网模型、Edge TTS）会走网络。
@@ -243,8 +235,6 @@ Get-FileHash .\cute-fat-fish-pet-1.2.1-setup.exe -Algorithm SHA256
 <安装目录>\
 ├─ app\               ← src\ 铺到这里（桌宠本体）
 ├─ electron\          Electron 43 运行时（不进 git）
-├─ node\              语音识别用的真 node.exe（不进 git）
-├─ speech\            sherpa-onnx 引擎 + SenseVoice int8 模型（不进 git）
 ├─ launcher\          控制台
 ├─ standalone\        独立模式运行器 + 两个 .vbs
 ├─ defaults\          默认配置
@@ -259,15 +249,13 @@ Get-FileHash .\cute-fat-fish-pet-1.2.1-setup.exe -Algorithm SHA256
 
 **需要**：Windows x64、Node.js 24（自带 `node --experimental-strip-types` 之类新特性）、Python 3（打包脚本）、[NSIS 3](https://nsis.sourceforge.io/)（出安装程序）。
 
-**三块外部运行时约 689 MB，不进 git**，必须自备一份：
+**一块外部运行时约 347 MB，不进 git**，必须自备一份：
 
 | 块 | 是什么 | 大小 |
 | --- | --- | --- |
 | `electron\` | Electron 43.3.0 win-x64 | 约 347 MB |
-| `node\` | node v24.21.0 win-x64（语音识别的原生插件在 Electron 里加载不了：`External buffers are not allowed`，必须用真 node.exe） | 约 89 MB |
-| `speech\` | sherpa-onnx 原生引擎 + SenseVoice int8 模型 | 约 253 MB |
 
-最省事的办法是指向**一份已经装好的可爱大肥鱼桌宠**，它会直接从那儿认这三块：
+最省事的办法是指向**一份已经装好的可爱大肥鱼桌宠**，它会直接从那儿认这一块：
 
 ```powershell
 npm run toolchain                                   # 先看缺什么、去哪儿拿
@@ -281,7 +269,7 @@ npm run paths                                       # 构建期隐私路径门�
 改完代码最常用的两条：
 
 ```powershell
-node build\build.mjs launcher assets   # 只铺这几块（块名：app launcher standalone defaults assets verify electron node speech）
+node build\build.mjs launcher assets   # 只铺这几块（块名：app launcher standalone defaults assets verify electron）
 node build\build.mjs --list            # 只看会做什么，不动磁盘
 ```
 
@@ -350,7 +338,7 @@ node verify.mjs
 - **宿主半侧**：`src\lib\index.js` 一份代码两种活法——在 DSH 里当 Cordis 插件（`name/inject/apply`），在独立版里由 `standalone\main.mjs` 用运行期 `registerHooks` 把三个 `@deepseek-ai/*` 包指到 `standalone\shims\`，再喂一个「刚刚够用」的伪 ctx（`standalone\context.mjs`），然后照常调用同一个 `apply(ctx)`。
 - **控制台**：单个 HTML（`launcher\index.html`）+ Electron 壳，IPC 到 `pet-api.js`；启停走 `standalone\main.mjs` / `stop-pet.mjs`。
 - **模型**：本机 Ollama，或任何 OpenAI 兼容接口（`/chat/completions`、视觉走 `image_url`）；余额查询走 DeepSeek 官方 `/user/balance`。
-- **语音**：sherpa-onnx + SenseVoice int8 + silero VAD（离线识别）；Edge TTS + SSML（在线合成）。
+- **语音**：Edge TTS + SSML（在线合成）。
 - **桌面渲染端与控制台的通道**：本机回环上的控制桥（1.1.0 起带 token 鉴权 + CORS 白名单，见 [发布说明](docs/release-notes-1.1.0.md) 与 [SECURITY.md](SECURITY.md)）。
 - **打包**：Node + Python 脚本铺 `stage\`，NSIS 3 出安装程序、zip 出绿色包。
 
@@ -360,7 +348,7 @@ node verify.mjs
 
 - 本项目以 **MIT** 协议发布，见 [`LICENSE`](LICENSE)——里面有两段版权：上游原作者 PC2005-cloud，本整合发布版 Mikolu。
 - **上游 MIT 全文原样随包分发**：[`assets/LICENSE.txt`](assets/LICENSE.txt)，没有删改，也没有移除原作者署名。
-- 第三方组件（Electron / Chromium、Node.js、sherpa-onnx、SenseVoice 模型、silero VAD、npm 依赖、Edge TTS、联网大模型接口等）的许可证与出处逐条列在 [`assets/第三方声明.txt`](assets/第三方声明.txt)；Ollama 不随包分发，需要你自己装。
+- 第三方组件（Electron / Chromium、npm 依赖、Edge TTS、联网大模型接口等）的许可证与出处逐条列在 [`assets/第三方声明.txt`](assets/第三方声明.txt)；Ollama 不随包分发，需要你自己装。
 - 更细的说明：[`NOTICE.md`](NOTICE.md)。
 
 ---

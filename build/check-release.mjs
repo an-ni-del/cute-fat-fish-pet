@@ -1,9 +1,9 @@
 /**
- * 发布树对账：stage\ 是不是「仓库源码 + 三块外部运行时」原样铺出来的。
+ * 发布树对账：stage\ 是不是「仓库源码 + 一块外部运行时」原样铺出来的。
  * ===========================================================================
  * 本仓库的源码就是成品，没有「蓝本 + 覆盖 + 打补丁」这一层，所以对账只有一句话：
  * **stage 里每个来自仓库的文件，都必须和仓库里那份逐字节相同；反过来也一样。**
- * 另外外部件（electron\node\speech）只检查关键文件在不在、文件数对不对。
+ * 另外外部件（electron）只检查关键文件在不在、文件数对不对。
  *
  * 用法：
  *   node build\check-release.mjs            # 对账，人读输出，退出码 0/1
@@ -124,9 +124,9 @@ if (junk.length) {
   say("  ✓ 运行期状态与开发期残留：0 个");
 }
 
-// 6) 三块运行时之外，发布树顶层只该有这些
+// 6) 一块运行时之外，发布树顶层只该有这些
 const TOP_OK = new Set([
-  "app", "electron", "launcher", "node", "speech", "standalone", "defaults",
+  "app", "electron", "launcher", "standalone", "defaults",
   "verify.mjs", "install.ps1", "uninstall.ps1", "安装.cmd", "卸载.cmd",
   "LICENSE.txt", "使用说明.txt", "第三方声明.txt",
 ]);
@@ -160,7 +160,6 @@ const GENERATED = (() => {
     "launcher/index.html",
     "launcher/preload.js",
     "launcher/paths.js",
-    "launcher/update.js",
     "launcher/pet-api.js",
     "launcher/rec.js",
     "launcher/agent.js",

@@ -10,6 +10,10 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { downloadArtifact } from "@electron/get";
 import extract from "@electron-internal/extract-zip";
+// ==== [local patch 6] 宠物注册表：见下方 createPetRegistry 处 ====
+import { createPetRegistry } from "./pet-registry.js";
+// ==== [local patch idle-gate@1] 无人互动信号：见下方 createIdleSignal 处 ====
+import { createIdleSignal } from "./idle-signal.js";
 
 //#region src/host/balance.ts
 /**
@@ -1347,7 +1351,6 @@ var HelperProcess = class {
 	*  （cb 由请求行携带；不走 stdin —— Electron 主进程收不到 piped stdin） */
 	async handleBridgeLine(line) {
 		const child = this.child;
-		if (!child?.stdin || !this.options.bridgeHandler) return;
 		let req;
 		try {
 			req = JSON.parse(line.slice(BRIDGE_PREFIX.length));
@@ -1355,7 +1358,13 @@ var HelperProcess = class {
 			this.logger.warn?.("[dsh-pet desktop helper] bridge 协议行非法，已忽略");
 			return;
 		}
-		if (typeof req.id !== "number") return;
+		// ==== [local patch idle-gate@1] 无 id = 助手的**单向通知**（目前只有「系统空闲多久」），
+		// 不需要应答通道，所以在校验应答通道之前就分派掉（见 main.js 的同名补丁）。====
+		if (typeof req.id !== "number") {
+			this.options.onNotice?.(req);
+			return;
+		}
+		if (!child?.stdin || !this.options.bridgeHandler) return;
 		try {
 			const resp = await this.options.bridgeHandler(req);
 			this.sendBridgeResponse(req, resp);
@@ -1643,7 +1652,6 @@ function apply(ctx) {
 		}, TERMINAL_KEEP_MS);
 		terminalTimers.set(sessionId, t);
 	};
-	let activePetId = "";
 	const broadcastCache = new Map();
 	const whisperCache = new Map();
 	const memoryPath = join(userRoot, "memory.json");
@@ -1780,11 +1788,17 @@ function apply(ctx) {
 			ts: now
 		};
 	});
+	// ==== [local patch 6] 宠物注册表 ====
 	/**
-	* 当前生效宠物列表 = readAllConfig 成品拍平（main + 文件宠物全部条目；合并器已保证 id 唯一、
-	* 字段填满），命令与桌面模式都从这里取。
+	* 「有哪几只宠物 / 在跟哪一只交互 / 哪几只显示到桌面」全部收进 lib\pet-registry.js
+	*（规则只写一次、状态可注入可单测）；这里只负责把「怎么读配置」交给它。
+	* 读法仍是 readAllConfig 成品拍平（main + 文件宠物全部条目；合并器已保证 id 唯一、字段填满）。
 	*/
-	const effectivePetList = () => flattenPetList(readAllConfig(configPaths));
+	const pets = createPetRegistry({
+		readPets: () => flattenPetList(readAllConfig(configPaths)),
+		isDesktopVisible,
+		onWarn: (message) => ctx.logger?.warn?.(message)
+	});
 	/** 命令触发的展示气泡：/chat 命令写入（两端 1s 轮询 /broadcast 拉取展示）；覆盖手动触发场景。
 	*  image：配图名称（碎碎念/对话配图开关开启时由 host 抽定或模型选定），随文本一起进缓存——
 	*  与 /whisper 的 serveWhisper 契约对齐，否则命令这条路会把图丢掉（只剩文字气泡）。 */
@@ -1795,42 +1809,10 @@ function apply(ctx) {
 			ts: Date.now()
 		});
 	};
-	/** 当前交互桌宠 id：/pet 已选且仍存在 → 该宠物；未选/已失效 → 有效宠物列表第一只（进程内，重启回默认） */
-	const resolveActivePetId = () => {
-		try {
-			const eff = effectivePetList();
-			if (eff.length === 0) return "";
-			if (activePetId && eff.some((p) => String(p.id) === activePetId)) return activePetId;
-			return String(eff[0].id);
-		} catch {
-			return activePetId;
-		}
-	};
 	/** 宠物的显示名（name，缺失回落 id）——命令文案用 */
 	const petDisplayName = (pet) => {
 		const n = String(pet.name ?? "").trim();
 		return n || String(pet.id ?? "");
-	};
-	let hasDesktopPet = false;
-	const refreshDesktop = () => {
-		hasDesktopPet = false;
-		try {
-			hasDesktopPet = effectivePetList().some((p) => isDesktopVisible(p.display));
-		} catch (e) {
-			ctx.logger?.warn?.(`[dsh-pet] 宠物配置非法，桌面模式已跳过：${e instanceof Error ? e.message : String(e)}`);
-		}
-	};
-	refreshDesktop();
-	/** 桌面可见宠物列表（[{id,size}]）：透传 Helper 决定创建几个局部窗口（每宠物一个）。 */
-	const desktopPetList = () => {
-		try {
-			return effectivePetList().filter((p) => isDesktopVisible(p.display)).map((p) => ({
-				id: String(p.id),
-				size: Number(p.size)
-			}));
-		} catch {
-			return [];
-		}
 	};
 	let helper;
 	let startRetryTimer;
@@ -1838,10 +1820,12 @@ function apply(ctx) {
 	let disposed = false;
 	/** 「无图形环境」提示只在进程生命周期内打一次，避免守护循环刷屏 */
 	let displayWarned = false;
+	// ==== [local patch idle-gate@1] 无人互动信号（屏幕监测 tick 的闸门，见那里的注释）====
+	const idleSignal = createIdleSignal();
 	/** 用已确认存在的 Electron 路径拉起桌面 Helper（每只桌面宠物一个局部小窗口）。 */
 	const launchHelper = (electronPath) => {
 		if (helper || disposed) return;
-		if (!hasDesktopPet) return;
+		if (!pets.hasDesktop()) return;
 		const port = typeof ctx.webServer?.port === "number" ? ctx.webServer.port : 0;
 		if (!port || port <= 0) {
 			if (!startRetryTimer) {
@@ -1861,7 +1845,12 @@ function apply(ctx) {
 				DSH_PET_CONFIG_URL: configUrl,
 				DSH_PET_SCALE: "1",
 				DSH_PET_BRIDGE: "1",
-				DSH_PET_PETS: JSON.stringify(desktopPetList())
+				DSH_PET_PETS: JSON.stringify(pets.desktopList())
+			},
+			// ==== [local patch idle-gate@1] 助手推来的单向通知（无 id 的协议行）。
+			// 目前只有「系统键鼠已经空闲多少秒」这一条：喂给 idleSignal，屏幕监测 tick 据此决定停不停。====
+			onNotice: (msg) => {
+				if (msg?.notice === "idle") idleSignal.note(msg.idleSec);
 			},
 			bridgeHandler: async (req) => {
 				const result = await handlePetRoute(req.url ?? "/", req.method ?? "GET", req.body);
@@ -1897,7 +1886,7 @@ function apply(ctx) {
 	*  （不 spawn 子进程，CLI node 与 DSH Desktop 均适用），下载完成后自动拉起。 */
 	const startHelper = () => {
 		if (helper || electronEnsure || disposed) return;
-		if (!hasDesktopPet) return;
+		if (!pets.hasDesktop()) return;
 		if (!hasGraphicalDisplay()) {
 			if (!displayWarned) {
 				displayWarned = true;
@@ -1924,6 +1913,8 @@ function apply(ctx) {
 			clearTimeout(startRetryTimer);
 			startRetryTimer = void 0;
 		}
+		// [local patch idle-gate@1] 助手没了就没有空闲信号了：清掉，别拿陈旧值把屏幕监测停住
+		idleSignal.clear();
 		helper?.stop(reason);
 		helper = void 0;
 	};
@@ -1933,6 +1924,8 @@ function apply(ctx) {
 			clearTimeout(startRetryTimer);
 			startRetryTimer = void 0;
 		}
+		// [local patch idle-gate@1] 同上：停旧起新期间没有空闲信号，防陈旧值把监测停住
+		idleSignal.clear();
 		const old = helper;
 		helper = void 0;
 		await old?.stopAndWait(reason);
@@ -1948,7 +1941,7 @@ function apply(ctx) {
 	let desktopSyncQueue = Promise.resolve();
 	const syncDesktop = () => {
 		desktopSyncQueue = desktopSyncQueue.then(async () => {
-			refreshDesktop();
+			pets.refresh();
 			await stopHelperAndWait("desktop-config-change");
 			startHelper();
 		}).catch((e) => {
@@ -1985,7 +1978,10 @@ function apply(ctx) {
 		maxCallsPerHour: 60,
 		localProvider: "ollama",
 		localModel: "",
-		localApi: "http://127.0.0.1:11434"
+		localApi: "http://127.0.0.1:11434",
+		// [local patch idle-gate@1] 无人互动闸门：系统级键鼠空闲 ≥ 这个秒数就停 5s tick
+		// （0 = 关掉这道闸，回到「永远按 intervalSec 跑」）。只在有桌面助手时有效，见 tick 处注释。
+		idleStopSec: 600
 	};
 	const SW_RT = {
 		sig: null,
@@ -1995,7 +1991,10 @@ function apply(ctx) {
 		once: false,
 		calls: [],
 		busy: false,
-		lastResult: null
+		lastResult: null,
+		// [local patch idle-gate@1] 闸门当前状态（用于只在切换时报一条日志）+ 没信号只提示一次
+		idleGated: false,
+		idleNoSignalWarned: false
 	};
 	const swCfg = () => {
 		try {
@@ -2180,7 +2179,7 @@ function apply(ctx) {
 	/** 情绪 + 台词走已有的工作状态通道：setState 选动画档位、setTask 当气泡文案。
 	 *  若真实会话档位优先级更高、压过了她，就退回 /broadcast 保证话一定说得出。 */
 	const swSpeak = (emotion, say) => {
-		const petId = resolveActivePetId() || "main";
+		const petId = pets.active() || "main";
 		const emo = SW_EMOTIONS.indexOf(emotion) >= 0 ? emotion : "thinking";
 		try {
 			SW_RT.seq += 1;
@@ -2349,6 +2348,27 @@ function apply(ctx) {
 			const cfg = swCfg();
 			const now = Date.now();
 			if (now - SW_RT.lastTick < Math.max(5, Number(cfg.intervalSec) || 12) * 1000) return;
+			/* ==== [local patch idle-gate@1] 无人互动就停 tick ====
+			 * 信号来自桌面助手（系统级键鼠空闲秒数，Electron powerMonitor；见 runtime/electron-helper/
+			 * main.js 的同名补丁）。它是**唯一**能答这句话的地方——宿主这半侧是纯 Node，没有系统输入信息。
+			 *   - idle === null（没助手 / 纯浏览器模式 / 还没收到过通知）⇒ 保持今天的行为继续监测：
+			 *     宁可不省，也绝不拿陈旧值误停；
+			 *   - idleStopSec <= 0 ⇒ 这道闸关掉（配置层开关，与 running 正交）；
+			 *   - 命中时**不更新 lastTick**：输入一回来（≤1s 内收到助手的通知）下一拍立刻抓屏，
+			 *     不用再等一个 intervalSec。 */
+			const idleMs = idleSignal.idleMs();
+			const stopSec = Number(cfg.idleStopSec);
+			const gated = idleMs !== null && Number.isFinite(stopSec) && stopSec > 0 && idleMs >= stopSec * 1000;
+			if (idleMs === null && !SW_RT.idleNoSignalWarned) {
+				SW_RT.idleNoSignalWarned = true;
+				ctx.logger?.info?.("[dsh-pet] 没有桌面助手，屏幕监测不启用「无人互动暂停」（浏览器内宠物不受影响；详见 roadmap §6.5）。");
+			}
+			if (gated !== SW_RT.idleGated) {
+				SW_RT.idleGated = gated;
+				if (gated) ctx.logger?.info?.(`[dsh-pet] 已经 ${Math.round(idleMs / 1000)} 秒没有键鼠输入，屏幕监测暂停（有输入立刻恢复；state.json 的 idleStopSec=0 可关掉这道闸）。`);
+				else ctx.logger?.info?.("[dsh-pet] 检测到键鼠输入，屏幕监测恢复。");
+			}
+			if (gated) return;
 			SW_RT.lastTick = now;
 			void swRun().catch(() => {});
 		}, 5000);
@@ -2643,7 +2663,7 @@ function apply(ctx) {
 				const parsed = JSON.parse(body ?? "null") ?? {};
 				const text = typeof parsed.text === "string" ? parsed.text.trim() : "";
 				const image = typeof parsed.image === "string" && parsed.image ? parsed.image : void 0;
-				const petId$say = String(parsed.petId ?? "") || resolveActivePetId() || "";
+				const petId$say = String(parsed.petId ?? "") || pets.active() || "";
 				if (!text || !petId$say) return {
 					kind: "json",
 					status: 200,
@@ -2915,14 +2935,9 @@ function apply(ctx) {
 		input: { hint: "[宠物 id 或名字]（留空查看当前）" },
 		handler: ({ rawInput }) => {
 			const arg = rawInput.trim();
-			let eff;
-			try {
-				eff = effectivePetList();
-			} catch {
-				eff = [];
-			}
+			const eff = pets.list();
 			if (!arg) {
-				const cur = resolveActivePetId();
+				const cur = pets.active();
 				const found = eff.find((p) => String(p.id) === cur);
 				return {
 					kind: "success",
@@ -2931,7 +2946,7 @@ function apply(ctx) {
 			}
 			const byId = eff.find((p) => String(p.id) === arg);
 			if (byId) {
-				activePetId = String(byId.id);
+				pets.setActive(byId.id);
 				return {
 					kind: "success",
 					text: "已选择桌宠：" + petDisplayName(byId)
@@ -2939,7 +2954,7 @@ function apply(ctx) {
 			}
 			const byName = eff.filter((p) => petDisplayName(p) === arg);
 			if (byName.length === 1) {
-				activePetId = String(byName[0].id);
+				pets.setActive(byName[0].id);
 				return {
 					kind: "success",
 					text: "已选择桌宠：" + petDisplayName(byName[0])
@@ -2960,7 +2975,7 @@ function apply(ctx) {
 		description: "与桌宠对话：留空 = 碎碎念一句；输入消息 = 正常对话",
 		input: { hint: "[消息]（留空 = 碎碎念）" },
 		handler: async ({ rawInput }) => {
-			const petId = resolveActivePetId();
+			const petId = pets.active();
 			if (!petId) return {
 				kind: "error",
 				text: "没有可交互的桌宠"

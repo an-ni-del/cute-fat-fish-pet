@@ -5,7 +5,7 @@
  * `src\` 里就是完整源码（打完所有历史补丁的成品），所以构建只做两件事：
  *
  *   1. 把仓库里的源码树按发布版结构铺进 stage\
- *   2. 把三块几百 MB、不进 git 的外部运行时（electron\node\speech）从
+ *   2. 把一块几百 MB、不进 git 的外部运行时（electron）从
  *      「这台电脑上的一份安装」或命令行指的地方复制进来（见 build\toolchain.mjs）
  *
  * 铺出来的 stage\ 就是最终应用：安装器把它整个装到 %LOCALAPPDATA%\BlueHairMaid；
@@ -18,9 +18,9 @@
  *   node build\build.mjs --clean            先删掉 stage\ 再来
  *   node build\build.mjs --no-gate          跳过隐私路径门禁（不推荐）
  *   node build\build.mjs --toolchain "D:\某处\BlueHairMaid"
- *   node build\toolchain.mjs                只查三块外部件齐不齐
+ *   node build\toolchain.mjs                只查一块外部件齐不齐
  *
- * 块名：app launcher standalone defaults assets verify electron node speech
+ * 块名：app launcher standalone defaults assets verify electron
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -40,8 +40,8 @@ const CLEAN = argv.includes("--clean");
 const NO_GATE = argv.includes("--no-gate");
 const doGate = !NO_GATE;
 const over = parseOverrideArgs(argv);
-const BLOCKS = ["app", "launcher", "standalone", "defaults", "assets", "verify", "electron", "node", "speech"];
-const VALUED = ["--toolchain", "--electron", "--node", "--speech"];
+const BLOCKS = ["app", "launcher", "standalone", "defaults", "assets", "verify", "electron"];
+const VALUED = ["--toolchain", "--electron"];
 const what = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -198,8 +198,6 @@ if (want("verify")) {
   }
 }
 if (want("electron")) copyToolchain("electron");
-if (want("node")) copyToolchain("node");
-if (want("speech")) copyToolchain("speech");
 
 if (!LIST_ONLY) {
   log("");

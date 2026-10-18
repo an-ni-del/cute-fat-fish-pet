@@ -177,17 +177,22 @@ describe('源码守卫 —— helper 的两个兜底必须在位', () => {
       !/win\.setIgnoreMouseEvents\(/.test(main.replace(/function setWindowIgnore[\s\S]*?\n}/, '')),
       '不得再有绕过出口的直接调用',
     );
-    assert.ok(/clearInterval\(pointerTimer\)/.test(main), '窗口关闭时必须停掉轮询');
+    assert.ok(/clearTimeout\(pointerTimer\)/.test(main), '窗口关闭时必须停掉轮询（轮询是 setTimeout 起的，清它得用 clearTimeout）');
   });
 
   test('输入租约闭环：渲染端上报 busy，主进程据此判定，且只走唯一出口', () => {
     assert.ok(/const inputBusy = new Map\(\)/.test(main), '必须有每窗口的 busy 标记表');
     assert.ok(/ipcMain\.on\('pet:input-busy'/.test(main), 'busy 上报必须被接收');
+    // 只锁「第 4 个实参是 busy」这条不变量，不锁光标那一项怎么来的：
+    // 轮询里现在每个 tick 只读一次真实光标，同一个点既喂给判定也拿去广播（见下一条断言）。
     assert.ok(
-      /decideWindowIgnore\(b, screen\.getCursorScreenPoint\(\), ignoring, inputBusy\.get\(win\.id\) === true\)/.test(
-        main,
-      ),
+      /decideWindowIgnore\([^)]*inputBusy\.get\(win\.id\) === true\)/.test(main),
       '兜底轮询必须把 busy 带进判定——这正是 0.2.10 缺的一环（拖拽中被翻回穿透）',
+    );
+    assert.equal(
+      (main.match(/=\s*screen\.getCursorScreenPoint\(\)/g) ?? []).length,
+      1,
+      '真实光标每个 tick 只读一次：判定与广播必须用同一个点（读两次会差几毫秒，也会白烧一次系统调用）',
     );
     assert.ok(/inputBusy\.delete\(win\.id\)/.test(main), '窗口关闭时必须清掉 busy 标记（防 id 复用串味）');
     // busy 只能经兜底轮询生效，不得在 IPC 里直接翻窗口——否则两条通道抢着翻同一个窗口
@@ -233,11 +238,15 @@ describe('守卫：渲染端的输入租约必须在位（helper 随包发行，
   });
 
   test('建立点：拖拽成立 / 菜单开 / 弹窗开都上报', () => {
-    // 拖拽：onPointerDown 里立刻上报（不等过阈值——按下瞬间窗口就已经必须保持可交互）
-    assert.ok(
-      /setPointerCapture[\s\S]{0,600}?this\.syncInputBusy\(\)/.test(sprite),
-      'onPointerDown 必须在建立拖拽状态后上报 busy',
-    );
+    // 拖拽：onPointerDown 里立刻上报（不等过阈值——按下瞬间窗口就已经必须保持可交互）。
+    // 取整个 onPointerDown 方法体再比先后，不用字面字符窗口：方法体里的中文注释一长，
+    // 写死的窗口（原来是 600）就会被撑破误报——实测两者相距 633 字符，行为本身一直是对的。
+    const down = /onPointerDown\(e\) \{([\s\S]*?)\n {2}\}/.exec(sprite);
+    assert.ok(down, 'sprite.js 里找不到 onPointerDown()');
+    const capAt = down[1].indexOf('setPointerCapture');
+    const busyAt = down[1].indexOf('this.syncInputBusy()');
+    assert.ok(capAt >= 0, 'onPointerDown 必须 setPointerCapture');
+    assert.ok(busyAt > capAt, 'onPointerDown 必须在建立拖拽状态后上报 busy');
     assert.ok(
       /d\.dragging = true;[\s\S]{0,400}?this\.syncInputBusy\(\)/.test(sprite),
       '真正开始拖拽时也要上报（此时可能尚未上报过）',

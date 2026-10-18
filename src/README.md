@@ -6,7 +6,7 @@ optional screen watching.
 
 This directory is the **plugin half** of
 [cute-fat-fish-pet](https://github.com/12we21/cute-fat-fish-pet). The standalone Windows
-edition — same character, plus offline speech recognition, Edge TTS, a control console and an
+edition — same character, plus Edge TTS, a control console and an
 installer — lives in the repository root; see the
 [root README](https://github.com/12we21/cute-fat-fish-pet#readme).
 
@@ -47,7 +47,6 @@ dsh plugin --profile web add ./cute-fat-fish-pet/src
 The plugin is a subset of the standalone edition. These live in the standalone Windows build,
 not in the DSH plugin:
 
-- offline speech recognition (sherpa-onnx + SenseVoice)
 - Edge TTS voices
 - the single-page control console
 

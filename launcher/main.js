@@ -16,7 +16,7 @@
 //   electron.exe . --start    启动桌宠并等它健康
 //   electron.exe . --stop     停止桌宠并等它退干净
 
-const { app, BrowserWindow, ipcMain, shell, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -43,7 +43,6 @@ const CONFIG_FILE = path.join(DATA_ROOT, "main-config.json");
 const petApi = require("./pet-api");
 const rec = require("./rec");
 const agent = require("./agent");
-const update = require("./update");
 
 // 音高（发布版补丁 T2）：桌宠助手每次合成都重读这个文件的第一行，所以改完立刻生效、不用重载她的窗口。
 // 格式 +0Hz（默认）/ +30Hz / -15Hz，认不出来或超出 ±80 就当 +0Hz —— 跟 app 里 ttsPitchFromConfig() 同一套规则。
@@ -442,8 +441,6 @@ function runnerEnv() {
 		DSH_PET_ELECTRON_PATH: PATHS.electronExe,
 		ELECTRON_RUN_AS_NODE: "1", // 用包内 Electron 当 node 跑：机器上没装 node 也能跑
 	};
-	// 语音识别要用包里的 sherpa 引擎 + SenseVoice 模型 + 真 node.exe（Electron 加载不了那个 addon）
-	for (const [k, v] of Object.entries(PATH_RULES.speechEnv(PATHS))) if (!env[k]) env[k] = v;
 	const prof = PATH_RULES.readDeviceProfile(PATHS);
 	if (prof && prof.tune) {
 		if (!env.DSH_PET_NUM_CTX) env.DSH_PET_NUM_CTX = String(prof.tune.numCtx);
@@ -554,62 +551,6 @@ function appInfo() {
 		firstRun: !fs.existsSync(CONFIG_FILE) && !fs.existsSync(DEVICE_PROFILE),
 		profile: PATH_RULES.readDeviceProfile(PATHS),
 	};
-}
-
-// ---------------------------------------------------------------------------
-// 一键更新（1.2.0）：问 GitHub → 下安装包 → 关掉自己交给独立脚本静默装
-//   为什么不让控制台自己装：它自己就是 <root>\electron\electron.exe 起来的，
-//   文件正被自己锁着，只能退出后由外面的进程装。细节见 ./update.js 开头那段说明。
-// ---------------------------------------------------------------------------
-function currentVersion() {
-	return (readJson(path.join(REPO, "launcher", "package.json")) || {}).version || "";
-}
-
-async function updateCheck() {
-	return update.check({ current: currentVersion(), root: PATHS.root, userRoot: PATHS.userRoot });
-}
-
-async function updateDownload(event, req) {
-	return update.download({
-		exe: req && req.exe,
-		userRoot: PATHS.userRoot,
-		onProgress: (p) => {
-			try {
-				if (event && event.sender && !event.sender.isDestroyed()) event.sender.send("update-progress", p);
-			} catch {
-				/* 窗口关了就算了 */
-			}
-		},
-	});
-}
-
-/** 停桌宠 → 写脚本 → 退出；剩下的事脚本自己做，结果下次启动回读 */
-async function updateApply(req) {
-	const st = await doStatus().catch(() => ({ running: false }));
-	const relaunchPet = !!st.running;
-	if (relaunchPet) {
-		await doStop().catch(() => {});
-	}
-	const r = await update.apply({
-		root: PATHS.root,
-		userRoot: PATHS.userRoot,
-		installerPath: (req && req.path) || "",
-		from: currentVersion(),
-		to: (req && req.to) || "",
-		pid: process.pid,
-		relaunchPet,
-	});
-	if (r.ok) {
-		// 让界面把"马上关窗"那句话显示出来再退；脚本那边会等这个进程真的没了才动手
-		setTimeout(() => {
-			try {
-				app.quit();
-			} catch {
-				/* 已经在退了 */
-			}
-		}, 1500);
-	}
-	return Object.assign({}, r, { relaunchPet });
 }
 
 /** apply=true 时把结果落到 state.json（只补空项，force 才覆盖主人选过的） */
@@ -749,23 +690,14 @@ if (doIdx >= 0 && argv[doIdx + 1]) {
 			else if (req.op === "persona-text") out = { ok: true, personaResult: petApi.writePersonaText(req.text), options: await doOptions() };
 			else if (req.op === "list-apps") out = petApi.listApps(req.limit || 60);
 			else if (req.op === "open") out = await petApi.openTarget(req.kind, req.target);
-			else if (req.op === "rec-detect") out = rec.detectRecorders();
-			else if (req.op === "rec-status") out = await rec.recStatus();
-			else if (req.op === "rec-set") out = rec.writeRecord(req.patch || {});
-			else if (req.op === "rec-start") out = await rec.recStart();
-			else if (req.op === "rec-stop") out = await rec.recStop();
-			else if (req.op === "rec-open") out = await rec.recOpen();
-			else if (req.op === "rec-dir") out = await rec.recSetDir(req.dir);
+			else if (req.op === "prefs-get") out = { ok: true, record: rec.readPrefs(), file: rec.PREFS_FILE };
+			else if (req.op === "prefs-set") out = rec.writePrefs(req.patch || {});
 			else if (req.op === "agent") out = await agent.runAgent(req.text || "", {});
 			else if (req.op === "say") out = await rec.say(req.text || "");
 			else if (req.op === "tts-pitch-get") out = { ok: true, pitch: readTtsPitch(), file: TTS_PITCH_FILE };
 			else if (req.op === "tts-pitch-set") out = writeTtsPitch(req.pitch);
 			else if (req.op === "perm") out = await rec.readPerm();
 			else if (req.op === "app-info") out = { ok: true, info: appInfo() };
-			else if (req.op === "update-check") out = await updateCheck();
-			else if (req.op === "update-download") out = await updateDownload(null, req);
-			else if (req.op === "update-apply") out = await updateApply(req);
-			else if (req.op === "update-result") out = update.readResult({ userRoot: PATHS.userRoot, current: currentVersion() });
 			else if (req.op === "detect") out = { ok: true, profile: await runDetect({ apply: false }) };
 			else if (req.op === "detect-apply") out = { ok: true, profile: await runDetect({ apply: true, force: !!req.force }) };
 			else if (req.op === "probe") out = await probeModels(req.models || []);
@@ -820,6 +752,14 @@ if (doIdx >= 0 && argv[doIdx + 1]) {
 				},
 			});
 			win.loadFile(path.join(HERE, "index.html"));
+			// 启动方（start-pet.vbs 的 sh.Run style 0、Node spawn 的 windowsHide 等）会给本进程的
+			// STARTUPINFO 带 SW_HIDE，Windows 把它应用到第一个顶层窗口——控制台首窗会被「隐藏」，
+			// 表现为双击没反应、第二次拉起经 second-instance 的 win.show() 才出现。这里显式 show
+			// 一次覆盖继承来的 SW_HIDE，保证任何方式启动首窗都可见。
+			win.once("ready-to-show", () => {
+				win.show();
+				win.focus();
+			});
 			// 第一次运行：不等用户点按钮，自己先把「这台电脑适合什么模型」检测好并写进设置。
 			// 用户要的就是「装完自动适配」，所以他打开就能用。
 			if (!fs.existsSync(DEVICE_PROFILE)) {
@@ -894,35 +834,9 @@ if (doIdx >= 0 && argv[doIdx + 1]) {
 			await shell.openPath(REPO);
 			return true;
 		});
-		// ---- 录屏（软件 / 保存位置 / 起停）----
-		ipcMain.handle("rec-get", async () => {
-			const det = rec.detectRecorders();
-			const st = await rec.recStatus();
-			return { ok: true, record: rec.readRecord(), recorders: det.list, status: st, file: rec.RECORD_FILE };
-		});
-		ipcMain.handle("rec-detect", () => rec.detectRecorders());
-		ipcMain.handle("rec-status", () => rec.recStatus());
-		ipcMain.handle("rec-set", (_e, patch) => rec.writeRecord(patch || {}));
-		ipcMain.handle("rec-action", async (_e, req) => {
-			const a = String((req && req.action) || "").toLowerCase();
-			if (a === "start") return rec.recStart();
-			if (a === "stop") return rec.recStop();
-			if (a === "open") return rec.recOpen();
-			if (a === "dir") return rec.recSetDir(req && req.dir);
-			return rec.recStatus();
-		});
-		ipcMain.handle("rec-pick-dir", async () => {
-			const cur = rec.readRecord().outDir;
-			const opts = {
-				title: "录像存到哪个文件夹",
-				properties: ["openDirectory", "createDirectory"],
-				...(cur && fs.existsSync(cur) ? { defaultPath: cur } : {}),
-			};
-			const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
-			if (r.canceled || !r.filePaths || !r.filePaths[0]) return { ok: false, canceled: true };
-			const applied = await rec.recSetDir(r.filePaths[0]);
-			return Object.assign({ ok: true, dir: r.filePaths[0] }, applied);
-		});
+		// ---- 浏览器 / 搜索偏好（文件名沿用录屏时代的 record.json，现在只存这两项）----
+		ipcMain.handle("prefs-get", () => ({ ok: true, record: rec.readPrefs(), file: rec.PREFS_FILE }));
+		ipcMain.handle("prefs-set", (_e, patch) => rec.writePrefs(patch || {}));
 		// ---- AI agent（让桌宠当前那个模型自己决定怎么动手）----
 		ipcMain.handle("agent-run", (_e, req) => agent.runAgent((req && req.text) || "", {}));
 		ipcMain.handle("say", (_e, text) => rec.say(text));
@@ -930,16 +844,6 @@ if (doIdx >= 0 && argv[doIdx + 1]) {
 		ipcMain.handle("tts-pitch-set", (_e, v) => writeTtsPitch(v));
 		// ---- 「装完自动适配」：检测本机模型 / 显存，挑模型，拉模型，启 Ollama ----
 		ipcMain.handle("app-info", () => appInfo());
-		// ---- 一键更新（检查 / 下载 / 静默安装 / 回读上次的结局）----
-		ipcMain.handle("update-check", () => updateCheck());
-		ipcMain.handle("update-download", (e, req) => updateDownload(e, req || {}));
-		ipcMain.handle("update-apply", (_e, req) => updateApply(req || {}));
-		ipcMain.handle("update-result", () => update.readResult({ userRoot: PATHS.userRoot, current: currentVersion() }));
-		ipcMain.handle("update-open-page", async (_e, url) => {
-			const target = /^https?:\/\//i.test(String(url || "")) ? String(url) : update.page;
-			await shell.openExternal(target);
-			return { ok: true, url: target };
-		});
 		ipcMain.handle("detect", async () => ({ ok: true, profile: await runDetect({ apply: false }) }));
 		ipcMain.handle("detect-apply", async (_e, req) => ({ ok: true, profile: await runDetect({ apply: true, force: !!(req && req.force) }) }));
 		ipcMain.handle("probe", (_e, req) => probeModels((req && req.models) || []));

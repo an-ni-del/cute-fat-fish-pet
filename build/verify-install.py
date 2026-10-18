@@ -14,8 +14,9 @@ import hashlib
 import os
 import sys
 
-# 安装程序用 /x 排掉的（脚本版安装器）—— 装出来的目录里不该有
-EXCLUDE = {"install.ps1", "uninstall.ps1", "安装.cmd", "卸载.cmd", "portable.txt"}
+# 安装程序用 /x 排掉的（脚本版安装器 + 本机运行时文件）—— 装出来的目录里不该有
+EXCLUDE = {"install.ps1", "uninstall.ps1", "安装.cmd", "卸载.cmd", "portable.txt",
+           "online.json", "data-root.txt"}
 # 装出来的目录里多出来的（NSIS 自己写的卸载器）
 EXTRA_OK = {"Uninstall.exe"}
 

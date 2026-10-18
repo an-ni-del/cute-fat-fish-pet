@@ -1,6 +1,6 @@
 # Architecture roadmap — removing host coupling
 
-**English summary.** A *plan* (no code changes in this document): replace the plugin-style lookups in `src\lib\index.js` (resolving `resolveActivePetId` on demand, pulling services off `ctx`, hiding state in assembly closures) with direct internal calls, so the pet engine is a plain module inside its own process instead of a plugin hosted by something else. Sections 6.1–6.8 add per-topic plans with real `file:line` anchors (scheduler, proposal/governance, character, long-term memory, idle CPU, control-bridge security, mapping table, and why a big refactor is not in this version). §6.6 (control-bridge hardening) is **done in 1.1.0**. **This document is in Chinese.**
+**English summary.** A *plan* (no code changes in this document): replace the plugin-style lookups in `src\lib\index.js` (resolving `resolveActivePetId` on demand, pulling services off `ctx`, hiding state in assembly closures) with direct internal calls, so the pet engine is a plain module inside its own process instead of a plugin hosted by something else. Sections 6.1–6.8 add per-topic plans with real `file:line` anchors (scheduler, proposal/governance, character, long-term memory, idle CPU, control-bridge security, mapping table, and why a big refactor is not in this version). §6.6 (control-bridge hardening) is **done in 1.1.0**; §6.5's step ② (pausing inactive modules — pointer-poll idle backoff `DSH_PET_POINTER_IDLE_MS`, and the screen-watch idle gate `idleStopSec` / `[local patch idle-gate@1]`) and **P1 (PetRegistry, `src\lib\pet-registry.js`)** are **done in 1.2.x**. **This document is in Chinese.**
 
 ---
 
@@ -150,14 +150,27 @@ src\lib\client.js           ← 浏览器半侧：不再自己拼 URL，base 由
 
 **验收**：`npm test`（`src\src\host\*.test.ts` 等 9 个 host 测试 + shared 测试）全绿；`standalone\check.mjs` 全 OK。
 
-### P1 · 消灭 `resolveActivePetId` 这类「延迟解析」
+### P1 · 消灭 `resolveActivePetId` 这类「延迟解析」（**本版 1.2.x 已做**）
 
-- 建 `PetRegistry`：构造时读一次配置，暴露 `list()`、`byId(id)`、`active()`、`setActive(id)`、`subscribe(fn)`；
+- 建 `PetRegistry`：`src\lib\pet-registry.js`（**手写源码**，与 `lib\index.js` 同目录、同性质、随包发布），
+  工厂 `createPetRegistry({ readPets, isDesktopVisible, onWarn })` 暴露
+  `list()`、`active()`、`setActive(id)`、`refresh()`、`hasDesktop()`、`desktopList()`；
   「id 失效就回退第一只」这条规则**只写一次**，放在 `active()` 里。
-- 4 个调用点（`2183`、`2603`、`2882`、`2920`）改成 `pets.active()`；`activePetId` 从闭包变量变成 registry 内部状态，可注入、可单测。
-- 同类处理：把 `hasDesktopPet` / `refreshDesktop()`（`1814-1823`）并进 registry 的派生视图，避免「两处各自算一遍」。
+- 为什么单独一个模块：`lib\index.js` 顶层 import 了 `@deepseek-ai/*`，本仓库不带这些包，单测里 import 它必然
+  `ERR_MODULE_NOT_FOUND`；把「读配置 → 校验 → 回退」拆到只认注入函数的文件里就能直接测
+  （同款做法：`runtime\electron-helper\pointer-target.js` + `pointer-target.test.ts`）。
+- 原三个函数收进 registry：`resolveActivePetId()` → `active()`（`swSpeak`、`/say`、`/pet`、`/chat` 四个调用点）；
+  `hasDesktopPet` / `refreshDesktop()`（原 `1814-1823`）→ `hasDesktop()` / `refresh()`（`launchHelper`、`startHelper`、
+  `syncDesktop` 三处）；`desktopPetList()` → `desktopList()`（`DSH_PET_PETS` 环境变量）。
+  `activePetId` 从 `apply()` 闭包变量变成 registry 内部状态 —— 可注入、可单测。
+- **刻意没做**计划里提到的 `byId(id)` 与 `subscribe(fn)`：前者没有调用方（`/pet` 命令用的是**一次快照** `list()` 里
+  同时匹配 id 与名字，不能拆成两次读），后者没有订阅者（工作状态那条链仍走 `ctx.effect`）。等真有调用方再加。
+- 时序不变：registry 不缓存列表，每次调用仍读一次盘（配置在运行期会被改写，保存后由 `syncDesktop()` → `refresh()` 重算）；
+  `active()` 读配置失败时**保持上一次的选择**，与旧 `resolveActivePetId` 的 `catch` 分支逐字一致。
 
-**验收**：新增 `pet-registry.test.ts`（空列表、当前 id 失效、显式指定 id、配置抛错四个用例）；命令文案与 `/say` 行为逐条对齐旧行为。
+**验收**：新增 `src\src\host\pet-registry.test.ts`（13 例：空列表、未选过、保持已选、id 失效回退、数字 id 按字符串比对、
+配置抛错保持上次选择、`setActive`/`list`、桌面派生视图 `desktopList`/`hasDesktop`/`refresh`、非法配置告警一次）；
+命令文案与 `/say` 行为逐条对齐旧行为（diff 只替换调用点，字符串拼接未动）。
 
 ### P2 · 路由前缀与资源 URL 注入化
 
@@ -209,7 +222,8 @@ src\lib\client.js           ← 浏览器半侧：不再自己拼 URL，base 由
 | `ctx.llm.stream` 契约 | 必须是 **AsyncIterable**，写成 `async` 函数会立刻 TypeError，且 rejected promise 无人接管会以 unhandled rejection 终止进程 | `context.mjs:15-20` 的两条硬教训写进适配层文档与测试 |
 | `resolveModelInfo` 契约 | 必须返回 Promise（同步返回 undefined 会让调用方 `.then()` 炸） | 同上 |
 | 工作状态 | 插件靠 `ctx.on("session/event")` 驱动；独立版目前是 noop（工作状态永远空闲） | P1 之后把「工作状态源」也做成注入接口，独立版可用本机端口/文件事件替代 |
-| 构建链 | 现在**没有** tsdown 构建链（`src\lib\` 是签入的产物） | 改 TS 源码后必须重新生成 `lib\`；P0 要先确认这一步由谁做、怎么验证 |
+| 构建链 | **已有**（2026-10-17 补）：`src\tsdown.config.ts` + `src\scripts\build-lib.mjs`，`npm run build:lib:check -w src` 可校验。浏览器半侧 `lib\client.js` 已能**逐字节复现**；但宿主半侧不行——`lib\index.js` 上压着 21 条只用 JS 打的本地补丁（全局大脑开关、对话上下文注入、`/say`、`/quip`、屏幕监测那几组），而 `src\src\host\*.ts` 至今是上游 0.3.0 原样（见 [differences-from-upstream](differences-from-upstream.md)） | 宿主半侧**继续就地改 `lib\index.js`**，别用 TS 覆盖它（等于删功能）；要真正交给 TS，下一步是先把这 21 条补丁回灌 `src\src\host\*.ts`，再要求构建结果与签入版逐字节一致 |
+| 行尾与复现 | 签入的 `lib\*.js` 是在 LF 检出上构建的；`.gitattributes` 原来是 `* text=auto`，Windows 检出把源码变 CRLF，而 rolldown 对 CRLF 里的块注释会多吐空行 ⇒ 同一份源码构建出**不同字节**（`lib\client.js 文件形态` 那条测试失败就由此） | **已解决**：`.gitattributes` 已给 `/src/src/**` 与 `/src/lib/**` 钉上 `text eol=lf`（2026-10-17），检出本身即 LF、那条测试转绿、发布字节与签入 blob 一致；`build-lib.mjs` 仍先拷一份 LF 副本再构建，作为不受 `.gitattributes` 影响那一途（旧检出 / 打包副本）的兜底 |
 | 版本漂移 | 上游 0.3.6 已有 `src/standalone/`（本仓库的独立版是从它演化来的） | 去宿主化后与上游差异变大，**不再跟随上游**，只保留 MIT 署名 |
 
 ---
@@ -300,16 +314,16 @@ src\lib\client.js           ← 浏览器半侧：不再自己拼 URL，base 由
 
 - **桌面端是软件合成**：`src\runtime\electron-helper\main.js:114-121`，因为 Windows 分层窗口在 DWM 下的两个已知缺陷，win32 上直接 `app.disableHardwareAcceleration()` —— 动画全靠 CPU 合成。
 - 动画本体是双 `<video>` 播 VP9-alpha webm（`src\runtime\electron-helper\sprite.js:137/139`，起播 `:423`）；位移 / 拖拽 / 抛掷 / 压缩是四个 rAF 循环（`:682/688`、`:894/896`、`:986/988`、`:1015/1023`）。
-- 常驻轮询：指针 **60 ms** 一次（`main.js:315 const POINTER_POLL_MS = 60;`，循环 `:487-495`，每次都 `getBounds()` + `screen.getCursorScreenPoint()`，必要时 `setWindowIgnore`）；宿主存活探测 `main.js:109-111`；屏幕监测 5 s tick（`src\lib\index.js:2305-2311`）；语音静音 tick 10 s（`sprite.js:3370`）。
+- 常驻轮询：指针 60 ms 一次（`main.js:315 const POINTER_POLL_MS = 60;`，循环已改成自调度 `setTimeout`），每 tick 只 `getBounds()` + **一次** `screen.getCursorScreenPoint()`，必要时 `setWindowIgnore`。**待机退避已做**（`[local patch pointer-idle-backoff@1]`，`main.js:316-338`）：光标静止 ≥ `POINTER_IDLE_AFTER_MS`（1 s）后间隔放宽到 `POINTER_IDLE_MS`（默认 250 ms，`DSH_PET_POINTER_IDLE_MS=0` 可关回常速），光标一动 / 穿透状态一翻立刻回到 60 ms；同一个点既喂兜底判定又拿去广播（原来读两次）。宿主存活探测 `main.js:109-111`；屏幕监测 5 s tick（`src\lib\index.js:2305-2311`）；语音静音 tick 10 s（`sprite.js:3370`）；**空闲上报 1 s 探一次**（`[local patch idle-gate@1]`，只读一个系统计数器，且只在「动 / 停」翻转时才写一行 stdout，见下）。
 - 「GPU 查询」不是热路径：显存只在首次运行读一次注册表（`standalone\detect.mjs:44-45`）；贵的是上面那两行。
 
-**想改成什么**：三层节流——① 待机时降帧率 / 降 `playbackRate`，不可见时暂停 video（`:423` 一带）；② 完全暂停不活跃模块（屏幕监测在无人互动时停 tick，指针轮询在鼠标不动时退避到 200~500 ms）；③ 抓屏只在需要时用原生 SwCapture（`src\lib\index.js:2028`，单次 90~180 ms，已是优化后的路径）。若将来能回到硬件加速，`main.js:114-121` 是第一优先。
+**想改成什么**：三层节流——① 待机时降帧率 / 降 `playbackRate`，不可见时暂停 video（`:423` 一带）〔**未做**，需要「动画质量」开关这个产品决策〕；② 完全暂停不活跃模块（指针轮询在鼠标不动时退避 → 〔**已做**，见上〕；屏幕监测在无人互动时停 tick → 〔**已做**，1.2.x：助手侧 `[local patch idle-gate@1]` 用 `powerMonitor.getSystemIdleTime()` 每秒探一次、只在「动/停」翻转时把 `{notice:"idle",idleSec}` 单向报给宿主，宿主侧 `lib/idle-signal.js` 外推 + `idleStopSec`（默认 600 s）闸门 `src\lib\index.js:2356` 一带；没助手时退回「不启用这道闸」〕）；③ 抓屏只在需要时用原生 SwCapture（`src\lib\index.js:2028`，单次 90~180 ms，已是优化后的路径）。若将来能回到硬件加速，`main.js:114-121` 是第一优先。
 
 **为什么值得**：桌宠是常驻程序，待机 CPU 直接决定用户会不会在任务管理器里把它关掉；屏幕监测的视觉调用按 12 秒节流（`src\lib\index.js:2308`）是待机最大的单笔开销。
 
-**风险 / 代价**：降帧可能让「待机呼吸」看起来卡，应该给用户「动画质量」开关而不是替他决定；指针退避影响「看向光标」的手感（`:482-485` 已有「没动就不发 IPC」，可在此基础上自适应）；软件合成是**为修 UI bug 故意选的**，动它先要复现那两个缺陷（拖拽黑边、大透明窗盖小窗内容丢失）。
+**风险 / 代价**：降帧可能让「待机呼吸」看起来卡，应该给用户「动画质量」开关而不是替他决定；指针退避**只**在光标真静止 1 s 后才生效，代价是「开始移动后的第一跳」最多晚 250 ms 才转向，之后立刻回 60 ms —— 若哪天觉得这一跳仍可感，把 `POINTER_IDLE_AFTER_MS` 调大或把 `POINTER_IDLE_MS` 调到 200 即可，不需要动别的；软件合成是**为修 UI bug 故意选的**，动它先要复现那两个缺陷（拖拽黑边、大透明窗盖小窗内容丢失）。
 
-**怎么验收**：固定场景（待机 10 分钟、无鼠标输入）先记一份今天的 CPU 基线，改后要低于它；不活跃模块暂停后，鼠标一动 / 说一句话必须在 1 帧内恢复；回归上面两个分层窗口缺陷。
+**怎么验收**：固定场景（待机 10 分钟、无鼠标输入）先记一份今天的 CPU 基线，改后要低于它；**指针退避**可以这么量：任务管理器看 helper 进程，鼠标静止 1 s 后 CPU 应比「动鼠标时」明显低；把 `DSH_PET_POINTER_IDLE_MS` 设成 `0`（关退避）再量一次做对照 —— 两次差值就是退避省下的量；同时确认静止时移动鼠标，宠物仍能在约 0.25 s 内朝向光标、悬停进身体仍可点击/拖拽（issue #55 兜底通道没被破坏）。不活跃模块暂停后，鼠标一动 / 说一句话必须在 1 帧内恢复；回归上面两个分层窗口缺陷。
 
 **建议阶段**：**1.2**（小步：指针退避、待机降帧、监测停 tick 三件事，各自独立开关、各自可回滚）
 
@@ -320,11 +334,11 @@ src\lib\client.js           ← 浏览器半侧：不再自己拼 URL，base 由
 - helper 侧已完成：`src\runtime\electron-helper\main.js:627 function startControlBridge()`；加固理由写在 `:610-624`（为什么「只听 127.0.0.1」挡不住浏览器里的任意网页）；CORS 白名单 `:676-686 corsOk()`（只认 `file://` 的 `origin === 'null'` / 缺失 与本机回环 http(s)）；应答头按白名单回显 `:690-699`；共享密钥随端口一起落盘 `:702` 一带、`:794`「先落盘再监听」。
 - 调用侧：`launcher\pet-api.js:8-9`（控制台带 `Authorization` / `X-Pet-Token`）、`:34 CONTROL_FILE`、`:71-75 readToken()`、`:106` 认 `mode === "helper-control"`。
 - 故意留的窄口子：`/health` 不鉴权，只做进程存活探测、不含私有数据（`main.js:617-618`）。
-- 还没收的一处：独立宿主服务自己的端点（`standalone\server.mjs:18-25`：`/`、`/health`、`/shutdown`）仍回 `access-control-allow-origin: *`，其中 `/shutdown` 是可被网页触发的动作 —— 建议列进 1.2 复查项（`standalone\**` 归队友）。
+- **独立宿主服务这边也收了**（`standalone\server.mjs`）：`corsFor()`（`:32-46`）只认「没有 Origin」「`null`」「`http(s)://127.0.0.1|localhost|[::1]`」三类，其余来源一律 `403` 且**不回** `access-control-allow-origin`；`/shutdown` 只收 `POST` 且要 token（`tokenFrom()`/`tokenOk()`，`:48-66`，用在 `:124-152`）——token 由 `main.mjs` 生成、只落盘在 `runtime.json` 里，`stop-pet.mjs` 读同一份带上（`stop-pet.mjs:63,70-72`），网页读不到。口径与 helper 侧控制桥一致。
 
 **想改成什么 / 为什么值得 / 验收**：做法与设计理由见代码注释本身（`src\runtime\electron-helper\main.js:610-624` 的四条），本文不复制握手与密钥细节；后续只做两件事——给 `/shutdown` 这类本机动作也加一道口令或改成非 HTTP 触发；把「哪些端点私有、哪些可公开」写成一页约定。
 
-**建议阶段**：**1.1.0 已完成**（helper 侧控制桥）；`standalone\server.mjs` 的 `/shutdown` 属于 **1.2** 复查项。
+**建议阶段**：**已完成** —— helper 侧控制桥与 `standalone\server.mjs` 的同名端点都已落地（见上）。
 
 ### 6.7 6 条与第 4 节计划的对应关系
 
@@ -334,7 +348,7 @@ src\lib\client.js           ← 浏览器半侧：不再自己拼 URL，base 由
 | 6.2 提案-治理 | 2.0 | 独立于 P0–P5，可并行；先做提案结构与审计 |
 | 6.3 PetCharacter | 2.0 | 与 P3（去宿主包依赖）、P4（客户端解耦）同向 |
 | 6.4 长期记忆 | 2.0 | 独立；1.2 只加导出/清空入口 |
-| 6.5 待机 CPU | **1.2** | 与 P2（路由前缀注入化）无关，可单独发小版本 |
+| 6.5 待机 CPU | **1.2** | 与 P2（路由前缀注入化）无关，可单独发小版本。**第 ② 步已在 1.2.x 落地**：指针退避（`[local patch pointer-idle-backoff@1]`）+ 屏幕监测无人互动停 tick（`[local patch idle-gate@1]` + `lib/idle-signal.js`，配置项 `idleStopSec`）；① 待机降帧待做 |
 | 6.6 控制桥安全 | **1.1.0 已做** | helper 侧已落地；`/shutdown` 留 1.2 |
 
 ### 6.8 为什么这一版（1.1.0）刻意不做大重构

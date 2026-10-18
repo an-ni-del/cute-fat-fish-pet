@@ -218,7 +218,12 @@ PetSprite.prototype.showWhisper = function showWhisper(text, image, opts) {
       '」' +
       (image ? ' [' + image + ']' : ''),
   );
-  this.stopMove();
+  // [诊断+修复] 指路/行走进行中：只弹气泡，不清位移、不抢动画。
+  // 否则"走到左边"的确认气泡一弹，下面这句 stopMove() 就把刚建立的 walkPlan/pendingMove 清掉、
+  // 末尾 playOnce() 把走路动画的 gen 顶掉 —— 走路还没上场就被自己人杀掉
+  // （表现：只冒气泡、宠物不动；随机漫游没有气泡跟着，所以能动）。
+  const walking = !!(this.walkPlan || this.pendingMove);
+  if (!walking) this.stopMove();
   this.whisperOn = true;
   this.whisperView = S.whisperBubbleView({ ok: true, text, ts: 0 });
   this.whisperImage = typeof image === 'string' ? image : '';
@@ -229,6 +234,8 @@ PetSprite.prototype.showWhisper = function showWhisper(text, image, opts) {
     this.whisperOn = false;
     this.renderBubble();
   }, BUBBLE_DURATION_MS);
+  // 走路进行中让路：不切碎碎念动画（走路动画正在场上，别顶掉它）
+  if (walking) return;
   this.playOnce(name);
 };
 

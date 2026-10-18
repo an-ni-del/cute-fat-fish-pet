@@ -3,7 +3,7 @@
 一个 **DeepSeek Harness** 桌宠插件：**106 个手绘透明动画**、桌面漫步、点击反应，可以接
 本地 **Ollama** 或 DSH 会话自带的在线模型聊天，可选看屏幕吐槽。
 
-这个目录是本项目的**插件半侧**。独立 Windows 版（同一个角色，另含离线语音识别、Edge TTS、
+这个目录是本项目的**插件半侧**。独立 Windows 版（同一个角色，另含 Edge TTS、
 控制台和安装包）在仓库根目录，见[根 README](https://github.com/12we21/cute-fat-fish-pet/blob/main/README.zh-CN.md)。
 
 ## 安装
@@ -36,7 +36,6 @@ dsh plugin --profile web add ./cute-fat-fish-pet/src
 
 插件是独立版的子集。下面这些只在独立 Windows 版里，插件里没有：
 
-- 离线语音识别（sherpa-onnx + SenseVoice）
 - Edge TTS 朗读
 - 单页控制台
 

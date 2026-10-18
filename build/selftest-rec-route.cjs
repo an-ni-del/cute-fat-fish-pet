@@ -1,10 +1,10 @@
 /**
- * selftest-rec-route.cjs —— 验证发布版 launcher\rec.js 的「她在哪」逻辑
+ * selftest-rec-route.cjs —— 验证 launcher\rec.js 的「她在哪」逻辑
  * ---------------------------------------------------------------------------
  * 背景（必须永久守住，别再退回 3080）：
  *   运行器把 runtime.json 写在**数据根**里（standalone\main.mjs 的 RUNTIME_FILE = <数据根>\runtime.json）。
- *   蓝本 rec.js 读的是 <repo>\standalone\runtime.json —— 那个文件不存在，于是永远回落到 3080，
- *   而同一台机器上 3080 常常坐着蓝本那只桌宠（主人自己的那只）。后果：控制台的「让她说这句话」
+ *   老代码读的是 <repo>\standalone\runtime.json —— 那个文件不存在，于是永远回落到 3080，
+ *   而同一台机器上 3080 常常坐着另一只桌宠（主人自己的那只）。后果：控制台的「让她说这句话」
  *   和 AI agent 的每一步 /quip 都会打到别人家的桌宠上。实测复现过。
  *
  * 跑法：node build\selftest-rec-route.cjs      （全部 ok → exit 0）
@@ -16,7 +16,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const DIST = path.resolve(__dirname, "..");
-const FILE = path.join(DIST, "overlay", "launcher", "rec.js");
+const FILE = path.join(DIST, "launcher", "rec.js");
 
 const cases = [];
 function check(name, ok, extra) {
@@ -70,9 +70,8 @@ check("runtime.json 里 pid 已死 → port 0（不猜、不乱连）", c.port =
   const s = await rec.say("测试");
   check('没在跑时 say() → reason "pet-offline"', s.ok === false && s.reason === "pet-offline", JSON.stringify(s));
 
-  // 场景 E：录屏设置（record.json）写在数据根里，不写程序目录
-  const want = "X:\\录制测试";
-  rec.writeRecord({ outDir: want });
+  // 场景 E：偏好设置（record.json，浏览器/搜索引擎）写在数据根里，不写程序目录
+  rec.writePrefs({ browser: "edge" });
   const inData = path.join(tmp, "dsh-pet", "record.json");
   const inRepo = path.join(rec.REPO, "dsh-pet", "record.json");
   let parsed = null;
@@ -81,9 +80,9 @@ check("runtime.json 里 pid 已死 → port 0（不猜、不乱连）", c.port =
   } catch {
     /* 没写出来 */
   }
-  check("writeRecord() 写进 <数据根>\\dsh-pet\\record.json", !!(parsed && parsed.outDir === want), inData);
-  check("writeRecord() 没写进程序目录 <repo>\\dsh-pet", !fs.existsSync(inRepo), inRepo);
-  check("readRecord() 能读回来", rec.readRecord().outDir === want);
+  check("writePrefs() 写进 <数据根>\\dsh-pet\\record.json", !!(parsed && parsed.browser === "edge"), inData);
+  check("writePrefs() 没写进程序目录 <repo>\\dsh-pet", !fs.existsSync(inRepo), inRepo);
+  check("readPrefs() 能读回来", rec.readPrefs().browser === "edge");
 
   fs.rmSync(tmp, { recursive: true, force: true });
   const bad = cases.filter((x) => !x.ok);

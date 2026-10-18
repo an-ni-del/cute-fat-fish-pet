@@ -1,14 +1,14 @@
 /* dsh-pet local patch: voice-targets@1
  *
- * 把「主人说出来的那个东西」分成三类之一：网址（url）/ 本机文件夹或文件（file）/ 软件名（app）。
+ * 把「主人要打开的那个东西」分成三类之一：网址（url）/ 本机文件夹或文件（file）/ 软件名（app）。
  *
  * 为什么值得单独一个文件：
  *   ① 分类是**纯字符串**逻辑，抽到这里就能在 node 里直接跑断言（仓库里配了
- *      _accept/test-voice-targets.cjs），不用为了一句正则去启动 Electron 或哄麦克风说话；
+ *      _accept/test-voice-targets.cjs），不用为了一句正则去启动 Electron；
  *   ② 规则只有这一份 —— sprite.js（渲染端）拿它决定「该问哪一项权限、往哪条路送」，
  *      main.js（主进程）只认分类结果，不再各自猜一遍；
  *   ③ 以前「打开A站首页」被当成"要找名叫『A站首页』的软件"（必然 not-found），
- *      「打开下载文件夹」也一样 —— 这两类话在语音里非常常见，值得有张表。
+ *      「打开下载文件夹」也一样 —— 这两类话非常常见，值得有张表。
  *
  * 边界（与 pc-actions / pc-ipc 的安全口径一致）：
  *   - 只做**非破坏性**判断：这里不认识的一律回落成 app，由主进程的 ambiguous 红线
@@ -106,7 +106,7 @@
   /* 「B站首页」「知乎官网」这类说法：后缀先削掉再查表。 */
   var SITE_SUFFIX = ['首页', '主页', '官网', '官方网站', '网站', '网页', '网址', '官方'];
   var FOLDER_SUFFIX = ['文件夹', '资料夹', '目录', '夹'];
-  /* 句尾语气词：语音识别经常把它们一并带出来（「打开B站吧」）。 */
+  /* 句尾语气词：主人打字时常把它们一并带出来（「打开B站吧」）。 */
   var TAIL = ['吧', '呀', '啊', '哦', '喔', '嘛', '呢', '啦', '呗', '哈', '咯', '滴', '的', '了'];
 
   var FILE_EXT = /\.(exe|lnk|url|txt|md|log|ini|bat|cmd|ps1|docx?|xlsx?|pptx?|pdf|csv|json|xml|html?|png|jpe?g|gif|bmp|webp|svg|mp4|mkv|avi|mov|flv|wmv|mp3|wav|flac|m4a|zip|rar|7z|tar|gz|webm|onnx|apk|iso)$/i;

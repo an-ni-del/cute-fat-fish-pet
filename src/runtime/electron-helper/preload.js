@@ -1,4 +1,4 @@
-/* dsh-pet local patches: cursor-bridge@6 voice-bridge@3 tts-bridge@2 cache-bridge@1 obs-rec-bridge@1 */
+/* dsh-pet local patches: cursor-bridge@6 tts-bridge@2 cache-bridge@1 */
 // preload 桥：只暴露窗口控制原语——
 //   - setBounds：宠物窗口逐帧跟随（renderer 上报包围盒的屏幕坐标，主进程 setContentBounds）。
 //     x/y/width/height = 窗口内容区坐标（用于移动窗口）；boxX/boxY = 宠物包围盒左上角
@@ -31,9 +31,9 @@ contextBridge.exposeInMainWorld('petBridge', {
   setInputBusy(busy) {
     ipcRenderer.send('pet:input-busy', !!busy);
   },
-  // 右键菜单「打开网站」：主进程用系统默认浏览器打开 DSH 网站（等效网页 Ctrl+点击链接）
-  openDshSite(url) {
-    ipcRenderer.send('pet:open-site', { url });
+  // 右键菜单「设置面板」：主进程拉起控制台窗口（launcher；单实例锁保证已开时只聚焦）
+  openConsole() {
+    return ipcRenderer.invoke('pet:open-console');
   },
   // ---- 宠物间碰撞（跨窗 broker）----
   reportFlight(state) {
@@ -92,32 +92,6 @@ contextBridge.exposeInMainWorld('petBridge', {
   openTarget(payload) {
     return ipcRenderer.invoke('pet:open-target', payload || {});
   },
-  // [local patch Z] OBS 录屏：渲染端只能传**动作**，路径/端口/密码全在主进程（obs-ctl.js）里
-  recStart() {
-    return ipcRenderer.invoke('pet:rec-start');
-  },
-  recStop() {
-    return ipcRenderer.invoke('pet:rec-stop');
-  },
-  recStatus() {
-    return ipcRenderer.invoke('pet:rec-status');
-  },
-  // [local patch V] 语音模式：开关（主进程据此门控麦克风权限）+ 16kHz Float32 PCM 送本机转写
-  setVoiceMode(on) {
-    return ipcRenderer.invoke('pet:voice-mode', { on: !!on });
-  },
-  voiceTranscribe(pcm, lang) {
-    // 语言只认 'zh' / 'auto'（默认 zh）：渲染端的值在这里收一次口，主进程还会再收一次
-    return ipcRenderer.invoke('pet:voice-transcribe', { pcm, lang: lang === 'auto' ? 'auto' : 'zh' });
-  },
-  // [local patch V] 自检留录音：把这段 16k 单声道 PCM 覆盖写到固定路径（路径主进程写死，渲染端给不了）
-  voiceSelfTestWav(pcm) {
-    return ipcRenderer.invoke('pet:voice-selftest-wav', { pcm });
-  },
-  // [local patch V] 语音链路日志：只上报"这一段听到了什么"，**路径由主进程写死**（渲染端给不了路径）
-  voiceLog(entry) {
-    return ipcRenderer.invoke('pet:voice-log', entry || {});
-  },
   // [local patch T] 语音输出：合成一段 mp3（主进程合成，**不落盘**；这里把 Buffer 归一成精确字节的 Uint8Array）
   // 失败一律 resolve 成 {ok:false,error}，绝不把异常甩给渲染层；成功是 {ok:true, mp3}，可直接 decodeAudioData。
   ttsSpeak(text, opts) {
@@ -134,5 +108,10 @@ contextBridge.exposeInMainWorld('petBridge', {
   cacheClean(payload) {
     const p = payload && typeof payload === 'object' ? payload : {};
     return ipcRenderer.invoke('pet:cache-clean', { dryRun: p.dryRun === true });
+  },
+  // [local patch W2] 今天天气：主进程拉 Open-Meteo（免费无 Key）。city 留空 = IP 自动定位；
+  // 失败一律 resolve 成 {ok:false,error}，成功是 {ok:true, city, temp, tmin, tmax, cond, code, windText, cached, stale, ageSec}。
+  weatherGet(city) {
+    return ipcRenderer.invoke('pet:weather-get', { city: String(city === null || city === undefined ? '' : city).trim() });
   },
 });

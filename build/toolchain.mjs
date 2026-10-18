@@ -1,21 +1,16 @@
 /**
- * toolchain.mjs —— 三块「外部件」的定位与校验
+ * toolchain.mjs —— 一块「外部件」的定位与校验
  * ---------------------------------------------------------------------------
  * 本仓库里 `src\`（应用本体）、`launcher\`（控制台）、`standalone\`（免安装运行器）、
- * `defaults\`、`assets\` 都是源码，克隆下来就有。但发布包里还有三块**几百 MB 的运行时**，
+ * `defaults\`、`assets\` 都是源码，克隆下来就有。但发布包里还有一块**几百 MB 的运行时**，
  * 不适合塞进 git，它们是：
  *
  *   electron\   Electron 43.3.0 win-x64 运行时（75 个文件，约 347 MB）
- *   node\       node v24.21.0 win-x64（3 个文件，约 89 MB）—— 语音识别必须用真 node.exe：
- *               SenseVoice 的原生插件在 Electron 里加载会抛 "External buffers are not allowed"
- *   speech\     sherpa-onnx 原生引擎 + SenseVoice int8 模型（8 个文件，约 253 MB）
  *
  * 找法（第一个能用的就用）：
- *   1. 命令行：--toolchain <目录> / --electron <目录> / --node <目录> / --speech <目录>
- *   2. 环境变量：BLUEHAIRMAID_TOOLCHAIN / BLUEHAIRMAID_ELECTRON / _NODE / _SPEECH
+ *   1. 命令行：--toolchain <目录> / --electron <目录>
+ *   2. 环境变量：BLUEHAIRMAID_TOOLCHAIN / BLUEHAIRMAID_ELECTRON
  *   3. 常见安装位置：%LOCALAPPDATA%\BlueHairMaid、%ProgramFiles%\BlueHairMaid、%USERPROFILE%\BlueHairMaid
- *   4. 语音包额外兜底：BLUEHAIRMAID_SHERPA（sherpa 那几个 .dll/.node 所在目录）
- *                      + BLUEHAIRMAID_STT_MODELS（sensevoice-onnx / silero 所在目录）
  *
  * 找不到不会静默跳过：`build.mjs` 会直接报错并告诉你缺什么、三种补齐方式。
  * `node build\toolchain.mjs` 可以单独查一遍现状。
@@ -47,28 +42,6 @@ export const PIECES = {
     // 版本钉死：包里的 helper 是按这个 Electron 大版本调过的，别拿别的糊上去
     wantVersion: { file: "version", equals: "43.3.0" },
   },
-  node: {
-    label: "node 运行时（语音识别用）",
-    dir: "node",
-    envs: ["BLUEHAIRMAID_NODE"],
-    cli: "--node",
-    expect: ["bin/node.exe", "LICENSE"],
-    wantVersion: { bin: "bin/node.exe", prefix: "v24." },
-  },
-  speech: {
-    label: "语音引擎与模型（sherpa-onnx + SenseVoice）",
-    dir: "speech",
-    envs: ["BLUEHAIRMAID_SPEECH"],
-    cli: "--speech",
-    expect: [
-      "sherpa/sherpa-onnx.node",
-      "sherpa/onnxruntime.dll",
-      "sherpa/sherpa-onnx-c-api.dll",
-      "sensevoice/models/sensevoice-onnx/model.int8.onnx",
-      "sensevoice/models/sensevoice-onnx/tokens.txt",
-      "sensevoice/models/silero/silero_vad.onnx",
-    ],
-  },
 };
 
 const toWin = (p) => p.split("/").join(path.sep);
@@ -88,7 +61,7 @@ export function defaultRoots() {
 
 /** 解析命令行里 --toolchain/--electron/... 的值（build.mjs 与单独运行都用它） */
 export function parseOverrideArgs(argv = process.argv.slice(2)) {
-  const out = { toolchain: null, electron: null, node: null, speech: null };
+  const out = { toolchain: null, electron: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     for (const key of Object.keys(out)) {
@@ -170,22 +143,14 @@ export function howToGet(piece) {
   if (piece === "electron") {
     lines.push(`  ③ 全新机器：按 Electron 43.3.0 官方发行版解压一份 win-x64（含 resources\\ 与 locales\\）`);
     lines.push(`     https://github.com/electron/electron/releases/tag/v43.3.0`);
-  } else if (piece === "node") {
-    lines.push(`  ③ 全新机器：Node.js v24 win-x64 官方 zip，把 bin\\node.exe 与 LICENSE 放齐`);
-    lines.push(`     https://nodejs.org/dist/`);
-  } else {
-    lines.push(`  ③ sherpa-onnx 预编译包（win-x64 的 .dll/.node）+ SenseVoice int8 模型（model.int8.onnx、tokens.txt）`);
-    lines.push(`     https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.12.14`);
-    lines.push(`     模型：ModelScope「iic/SenseVoiceSmall」或 HuggingFace「FunAudioLLM/SenseVoiceSmall」`);
-    lines.push(`     也可以两块分开指：BLUEHAIRMAID_SHERPA=<sherpa 目录>  BLUEHAIRMAID_STT_MODELS=<models 目录>`);
   }
   return lines.join("\n");
 }
 
-// 直接运行：把三块的现状打出来
+// 直接运行：把一块的现状打出来
 if (import.meta.url === `file://${process.argv[1]?.split(path.sep).join("/")}` || process.argv[1]?.endsWith("toolchain.mjs")) {
   const o = parseOverrideArgs();
-  console.log("外部件现状（不进 git 的三块运行时）");
+  console.log("外部件现状（不进 git 的一块运行时）");
   for (const piece of Object.keys(PIECES)) {
     const got = locate(piece, { override: o[piece], toolchain: o.toolchain });
     const spec = PIECES[piece];

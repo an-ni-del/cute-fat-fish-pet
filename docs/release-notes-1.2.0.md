@@ -131,7 +131,7 @@ Permanent link to the latest installer:
 ## License and attribution
 
 MIT (see [LICENSE](../LICENSE)). The upstream pet `dsh-pet` 0.3.0 by PC2005-cloud is MIT as well; of
-its 243 public files, 232 are byte-identical here and 11 are deliberately modified (each with size and
+its 243 public files, 231 are byte-identical here and 12 are deliberately modified (each with size and
 reason in [differences-from-upstream.md](differences-from-upstream.md)), no upstream file was deleted,
 and we add three engine files of our own (`obs-ctl.js`, `stt-worker.mjs`, `targets.js`) plus the
 console-side `launcher\update.js`. `assets/第三方声明.txt` inside the package lists every bundled
@@ -252,7 +252,7 @@ Windows 10/11 x64，解压后约 761 MB。显卡可选；本地模型走你已�
 ## 许可与署名
 
 MIT（见 [LICENSE](../LICENSE)）。上游桌宠 `dsh-pet` 0.3.0（PC2005-cloud）同样是 MIT；它公开的 243 个文件里，
-**232 个与本仓库逐字节相同、11 个是刻意修改的**（每个都带大小与原因，见
+**231 个与本仓库逐字节相同、12 个是刻意修改的**（每个都带大小与原因，见
 [differences-from-upstream.md](differences-from-upstream.md)），没有删掉上游任何文件；我们另外加了三个引擎文件
 （`obs-ctl.js`、`stt-worker.mjs`、`targets.js`）以及控制台侧的 `launcher\update.js`。
 包内 `assets/第三方声明.txt` 列了所有随包分发的组件。

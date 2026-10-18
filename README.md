@@ -4,7 +4,7 @@
 
 **A free, open-source desktop pet for Windows: a transparent little maid who lives on your desktop.**
 
-She idles, wanders around and does little animations on her own. She can chat with you, take a look at your screen and say something about it — and when you ask her to, she can open an app, a file, a folder or a web page for you, or start a screen recording.
+She idles, wanders around and does little animations on her own. She can chat with you, take a look at your screen and say something about it — and when you ask her to, she can open an app, a file, a folder or a web page for you.
 
 ![She has 106 hand-drawn animations](docs/images/demo.gif)
 
@@ -22,7 +22,7 @@ She idles, wanders around and does little animations on her own. She can chat wi
 
 Special thanks to **PC2005-cloud**, whose **dsh-pet 0.3.0** provided the early foundation and the inspiration for this project.
 
-The pet engine in [`src/`](src) is that codebase, carried forward and maintained in-tree: of the 243 files in the published upstream `dsh-pet@0.3.0` package, **232 are byte-identical here and 11 were changed on purpose** (each one listed with sizes and reasons in [docs/differences-from-upstream.md](docs/differences-from-upstream.md)), **no upstream file was dropped**, and three engine files (`runtime/electron-helper/obs-ctl.js`, `stt-worker.mjs`, `targets.js`) are ours. Everything else in this repository — the console, the standalone runner, the build chain, the installer, the docs — is this project's own work.
+The pet engine in [`src/`](src) is that codebase, carried forward and maintained in-tree: of the 243 files in the published upstream `dsh-pet@0.3.0` package, **225 are byte-identical here and 18 were changed on purpose** (each one listed with sizes and reasons in [docs/differences-from-upstream.md](docs/differences-from-upstream.md)), **no upstream file was dropped**, and two engine files (`runtime/electron-helper/obs-ctl.js`, `targets.js`) are ours. Everything else in this repository — the console, the standalone runner, the build chain, the installer, the docs — is this project's own work.
 
 There is no patching step any more: `src/` **is** the shipped source. Building is just laying the source tree out in release shape and adding the runtimes that are not kept in git.
 
@@ -63,9 +63,9 @@ The same list is in [NOTICE.md](NOTICE.md) (section 5), and the reasoning behind
 - **She talks with you** — click her to open the chat. Local models through [Ollama](https://ollama.com/) or any OpenAI-compatible endpoint; the console has three modes: **Local**, **Auto (best available)** and **Online**.
 - **She can watch your screen** (optional, switchable) — a screenshot every so often is handed to a vision model and she comments on it. With no vision model configured this path stays off instead of sending a random image.
 - **She mutters and speaks up** — she fills quiet moments on her own, and can be driven by work state (task started / finished / failed).
-- **She can do things for you (your call)** — open an app, a file, a folder or a URL; screen recording goes to OBS or to whatever software you pick, saved wherever you pick. Three permission switches turn this off completely.
-- **Voice** — speech input runs fully offline inside the package (sherpa-onnx + SenseVoice int8); her voice uses Edge TTS + SSML, with adjustable rate and pitch (the pitch is stored in the data root).
-- **One single-HTML console** — start / stop, status, models and "AI brain", voice, permissions, recording, logs: all in one window, no command line.
+- **She can do things for you (your call)** — open an app, a file, a folder or a URL. Three permission switches turn this off completely.
+- **Speech output** — she speaks with Edge TTS + SSML, with adjustable rate and pitch (the pitch is stored in the data root).
+- **One single-HTML console** — start / stop, status, models and "AI brain", voice, permissions, logs: all in one window, no command line.
 - **Persona and memory** — persona files, chat history and screen-watch state live in the data root; you can edit them and back the whole thing up.
 
 ![Right-click menu](docs/images/menu.png)
@@ -84,7 +84,7 @@ Download **`cute-fat-fish-pet-1.2.1-setup.exe`** (about 331.7 MB, NSIS) and doub
 
 - Installs to `%LOCALAPPDATA%\BlueHairMaid` by default — **no administrator rights needed**.
 - Want it elsewhere (D: drive, external disk)? Change it on the "Choose install location" page. Start-menu entry and desktop shortcut are created for you.
-- The package already contains the Electron runtime, the speech engine and models, and the real `node.exe` used for speech recognition, so it works **offline** right after installing.
+- The package already contains the Electron runtime, so there is nothing extra to install before she runs.
 
 ![Installer](docs/images/installer.png)
 
@@ -122,7 +122,7 @@ dsh plugin --profile web add ./cute-fat-fish-pet/src
 
 `src/lib/` is committed pre-built, so there is no build step. The repository carries the `dsh-plugin` topic and has been submitted to the [Awesome DSH Plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) directory under *Just for Fun* — that directory is what `dshmarket` and `awesome-dsh-plugin.com` read, while [dshfind](https://dshfind.com) mirrors every repository carrying the topic.
 
-This half of the project is a **subset** of the standalone build: all 106 animations, wandering, click reactions, chat through local **Ollama** or the DSH online models, and optional screen watching are in it. The offline speech recognition, the Edge TTS voice and the console window are **not** — those come with the installer and the zip above.
+This half of the project is a **subset** of the standalone build: all 106 animations, wandering, click reactions, chat through local **Ollama** or the DSH online models, and optional screen watching are in it. The Edge TTS voice and the console window are **not** — those come with the installer and the zip above.
 
 ### Every download comes with a `.sha256`
 
@@ -141,13 +141,13 @@ Get-FileHash .\cute-fat-fish-pet-1.2.1-setup.exe -Algorithm SHA256
 - **Start**: double-click the desktop shortcut "可爱大肥鱼桌宠" to open the **console**, then press **启动桌宠** ("Start the pet").
   The console does **not** pull her up by itself — that is deliberate, so that changing a setting does not make her pop out first.
 - **Stop**: press stop in the console, or double-click `standalone\stop-pet.vbs`.
-- **Autostart and auto-update are not implemented yet.** If you want autostart, put a shortcut to the console into your Startup folder.
+- **Autostart is not implemented yet** — if you want it, put a shortcut to the console into your Startup folder. Updating means downloading the new installer and running it over the old copy (see [Updating to a newer version](#updating-to-a-newer-version)).
 - **Uninstall**: "可爱大肥鱼桌宠" in Settings → Apps, or `卸载.cmd` in the install directory.
   Uninstalling **does not** delete your data (persona, memory, chat history stay). To remove everything, delete the data directory yourself (next section).
 
 ### Updating to a newer version
 
-There is **no automatic updater yet** — updating means downloading the new installer and running it over the old copy. Only program files are replaced; your data is not touched.
+Updating means downloading the new installer and running it over the old copy. Only program files are replaced; your data is not touched.
 
 1. **Close the pet first.** Right-click her tray icon → exit, or double-click `standalone\stop-pet.vbs`.
    The installer deliberately never kills processes (it must not kill a *different* pet on the same PC), so while `electron.exe` is running it stops and asks you to close her.
@@ -157,7 +157,7 @@ There is **no automatic updater yet** — updating means downloading the new ins
 
 What survives: persona, memory, chat history, settings and model configuration live in the data directory (`%APPDATA%\BlueHairMaid`), which the installer never touches.
 
-Portable zip: unpack the new zip over the old folder. Keep your own `standalone\online.json` (your online-model settings) and your `portable.txt` if you made one.
+Portable zip: unpack the new zip over the old folder — keep your own `standalone\online.json` (your online-model settings) and your `portable.txt` if you made one.
 
 > Scripted installs: `cute-fat-fish-pet-setup.exe /S /D=D:\path\to\install`. Two things to know — silent mode does **not** auto-detect the previous folder, so pass `/D=` yourself, and it will not replace files while she is running.
 
@@ -192,7 +192,7 @@ Treat the program directory (`%LOCALAPPDATA%\BlueHairMaid`) as **read-only**. Ev
 ├─ dsh-pet\
 │  ├─ main-config.json          persona + pet list
 │  ├─ screen-watch\state.json   screen-watch config and state, brain mode, local models
-│  ├─ record.json               recording settings (which app, where to save)
+│  ├─ record.json               browser / search-engine preferences (file name kept from an older version)
 │  ├─ tts-pitch.txt             voice pitch (default +0Hz)
 │  └─ main-animation\           your own animation assets (used with priority if present)
 ├─ device-profile.json          result of the automatic first-run fit
@@ -208,7 +208,6 @@ The pet page's own localStorage (position, size, sprite state) lives in `%APPDAT
 ### Privacy
 
 - **Screen watching** is **a local screenshot handed to the model you chose**. Pick a local Ollama model and nothing leaves your machine; pick an online model and the image goes to the endpoint you configured. Turn it off in the console and no screenshot is taken at all.
-- **Speech recognition runs offline**: sherpa-onnx + SenseVoice int8 are inside the package and need no network.
 - **Edge TTS needs the network** (it uses Microsoft's online speech synthesis).
 - **Online model API keys are stored in plain text** in `standalone\online.json` (in the program directory). It is a local file meant for you only — do not send this file to anyone, and do not upload a directory that contains it.
 - **She never phones home**: no telemetry, no usage reporting. Only the online features you turn on (online models, Edge TTS) use the network.
@@ -247,8 +246,6 @@ More detail, including the local control-bridge hardening added in 1.1.0, is in 
 <install dir>\
 ├─ app\               ← src\ laid out here (the pet engine)
 ├─ electron\          Electron 43 runtime (not in git)
-├─ node\              a real node.exe for speech recognition (not in git)
-├─ speech\            sherpa-onnx engine + SenseVoice int8 model (not in git)
 ├─ launcher\          console
 ├─ standalone\        standalone runner + the two .vbs launchers
 ├─ defaults\          default configuration
@@ -263,15 +260,13 @@ More detail, including the local control-bridge hardening added in 1.1.0, is in 
 
 **Requirements**: Windows x64, Node.js 24, Python 3 (packaging scripts), [NSIS 3](https://nsis.sourceforge.io/) (to build the installer).
 
-**The three runtime pieces (~689 MB) are not in git** and have to come from somewhere:
+**The Electron runtime (~347 MB) is not in git** and has to come from somewhere:
 
 | Piece | What it is | Size |
 | --- | --- | --- |
 | `electron\` | Electron 43.3.0 win-x64 | ~347 MB |
-| `node\` | node v24.21.0 win-x64 (the SenseVoice native addon cannot be loaded inside Electron: `External buffers are not allowed`, so a real node.exe is required) | ~89 MB |
-| `speech\` | sherpa-onnx native engine + SenseVoice int8 model | ~253 MB |
 
-The easy way is to point the build at **an already installed copy of Cute Fat Fish Pet**, which has all three:
+The easy way is to point the build at **an already installed copy of Cute Fat Fish Pet**, which has it:
 
 ```powershell
 npm run toolchain                                   # show what is missing and where to get it
@@ -289,7 +284,7 @@ node build\build.mjs launcher assets   # rebuild only these blocks
 node build\build.mjs --list            # show what it would do, touch nothing
 ```
 
-Blocks: `app launcher standalone defaults assets verify electron node speech`.
+Blocks: `app launcher standalone defaults assets verify electron`.
 
 Artifact names come from the `version` field in `src\package.json` and are ASCII-only (GitHub Releases drops non-ASCII asset names), so this version produces `cute-fat-fish-pet-1.2.1-setup.exe` and `cute-fat-fish-pet-1.2.1-win-x64.zip`.
 
@@ -304,7 +299,7 @@ Artifact names come from the `version` field in `src\package.json` and are ASCII
 - **Host side** — one file, [`src\lib\index.js`](src/lib/index.js), lives two lives: inside DSH it is a Cordis plugin (`name/inject/apply`); in standalone mode `standalone\main.mjs` redirects three `@deepseek-ai/*` packages to `standalone\shims\` at run time, feeds it a "just enough" fake ctx (`standalone\context.mjs`) and calls the very same `apply(ctx)`.
 - **Console** — a single HTML file (`launcher\index.html`) plus an Electron shell, IPC into `pet-api.js`; start/stop goes through `standalone\main.mjs` / `stop-pet.mjs`.
 - **Models** — local Ollama, or any OpenAI-compatible endpoint (`/chat/completions`, vision through `image_url`); balance lookup uses DeepSeek's `/user/balance`.
-- **Speech** — sherpa-onnx + SenseVoice int8 + silero VAD for offline recognition; Edge TTS + SSML for synthesis.
+- **Speech** — Edge TTS + SSML for synthesis.
 - **Console ↔ pet channel** — a loopback control bridge, hardened in 1.1.0 with token auth and a CORS allow-list (see the [release notes](docs/release-notes-1.1.0.md) and [SECURITY.md](SECURITY.md)).
 - **Packaging** — Node + Python scripts lay out `stage\`; NSIS 3 builds the installer, a Python script builds the portable zip.
 
@@ -367,7 +362,7 @@ The build also enforces this from the other side: `build\check-release.mjs` prov
 
 - This project is released under the **MIT** license — see [`LICENSE`](LICENSE), which carries **two** copyright lines: PC2005-cloud (upstream dsh-pet) and Mikolu (this integrated release).
 - **The upstream MIT text ships unmodified**: [`assets/LICENSE.txt`](assets/LICENSE.txt) is byte-identical to the upstream file, with the original author's attribution intact.
-- Third-party components (Electron / Chromium, Node.js, sherpa-onnx, the SenseVoice model, silero VAD, npm dependencies, Edge TTS, online model endpoints) are listed one by one in [`assets/第三方声明.txt`](assets/第三方声明.txt). Ollama is **not** bundled — install it yourself.
+- Third-party components (Electron / Chromium, npm dependencies, Edge TTS, online model endpoints) are listed one by one in [`assets/第三方声明.txt`](assets/第三方声明.txt). Ollama is **not** bundled — install it yourself.
 - More detail: [NOTICE.md](NOTICE.md).
 
 ---

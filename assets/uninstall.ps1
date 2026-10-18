@@ -54,10 +54,10 @@ if (-not $Quiet) {
 
 # 1. 先停进程
 #    判据是「可执行文件本身就在安装目录里」—— 不能用「命令行里出现过这个路径」来判：
-#    那样会把参数里凑巧提到该路径的其它 node.exe（甚至别的软件）一起杀掉。实测踩过这个坑。
+#    那样会把参数里凑巧提到该路径的其它软件一起杀掉。实测踩过这个坑。
 $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
   Where-Object {
-    $_.Name -in @("electron.exe", "node.exe") -and
+    $_.Name -in @("electron.exe") -and
     $_.ExecutablePath -and ($_.ExecutablePath -like "$Target*") -and
     ([int]$_.ProcessId -ne $PID)
   })

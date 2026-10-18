@@ -1,4 +1,4 @@
-/* dsh-pet local patches: cursor-broadcast@1 persona-ipc@1 music-ipc@5 desktop-ipc@4 local-keepalive@2 local-think-headroom@1 pc-ipc@4 voice-ipc@5 tts-ipc@2 cache-ipc@1 bridge-auth@1 voice-targets@1 */
+/* dsh-pet local patches: cursor-broadcast@1 pointer-idle-backoff@1 persona-ipc@1 music-ipc@5 desktop-ipc@4 local-keepalive@2 local-think-headroom@1 pc-ipc@4 tts-ipc@2 cache-ipc@1 bridge-auth@1 idle-gate@1 voice-targets@1 */
 /**
  * dsh-pet desktop helper —— Electron 主进程
  *
@@ -46,17 +46,15 @@ try {
   );
   process.exit(3);
 }
-const { app, BrowserWindow, ipcMain, screen, shell, protocol, session } = electronApi;
+const { app, BrowserWindow, ipcMain, screen, shell, protocol, session, powerMonitor } = electronApi;
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
-const { readFileSync, writeFileSync } = require('node:fs');
+const { execFileSync, spawn } = require('node:child_process');
+const { readFileSync, writeFileSync, existsSync } = require('node:fs');
 const fsPromises = require('node:fs/promises');
 // 点击穿透兜底通道的纯判定（不依赖 Electron 的 forward 鼠标钩子；见文件头注释）
 const { decideWindowIgnore } = require('./pointer-target.js');
 // 宿主存活判定（issue #56：宿主退出 → 管道断开 → 自己退，绝不弹框、绝不留僵尸）
 const { HOST_POLL_MS, hostIsGone, isBrokenPipeError, parseHostPid } = require('./host-liveness.js');
-// [local patch Z] OBS 录屏通道（obs-websocket）。单独一个文件是为了能用真正的 node 直接自测。
-const obsCtl = require('./obs-ctl.js');
 
 // 允许无用户手势直接播放（余额动画等）
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -313,6 +311,29 @@ function setWindowIgnore(win, ignore) {
 
 /** 兜底通道的光标轮询间隔（ms，与 issue #55 报告者实测值一致） */
 const POINTER_POLL_MS = 60;
+/**
+ * [local patch pointer-idle-backoff@1] 待机退避：光标连续静止 POINTER_IDLE_AFTER_MS 后，
+ * 轮询间隔由 POINTER_POLL_MS 放宽到本值。
+ *
+ * 为什么：这一个定时器同时干三件事——① 兜底判窗口穿透（issue #55）、② 把真实光标推给
+ * 渲染端做「看向光标」、③ 必要时翻转 windowIgnore。三件事的结果都只在「光标动了」或
+ * 「穿透状态翻了」时才变；光标静止时以 16.7Hz 空转 getBounds() + getCursorScreenPoint()
+ * 是纯白烧（还顺带白跑一遍 decideWindowIgnore）。桌宠是常驻程序，待机开销直接决定用户
+ * 会不会从任务管理器里把它关掉。
+ *
+ * 代价：光标静止时「看向光标」本就不需要更新，所以手感损失只在**开始移动后的第一跳**
+ * （≤ 本值），之后立刻回到 60ms 跟手。环境变量 DSH_PET_POINTER_IDLE_MS 可覆盖本值
+ * （'0' = 关闭退避，回到老的常速轮询；冒烟/排查用它复现旧行为）。
+ */
+function pointerIdleMs() {
+  const raw = process.env.DSH_PET_POINTER_IDLE_MS;
+  if (raw === undefined || raw === '') return 250;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 250;
+}
+const POINTER_IDLE_MS = pointerIdleMs();
+/** 静止多久才开始退避（ms）。小于它的「慢速移动」不算待机，免得把跟手感也一起降了 */
+const POINTER_IDLE_AFTER_MS = 1000;
 /** 冒烟期间暂停兜底轮询：它按**真实光标**翻转 windowIgnore，会干扰冒烟对渲染端通道的断言 */
 let pointerFallbackPaused = false;
 
@@ -443,6 +464,13 @@ function createPetWindows() {
     // 导致大宠物移动盖过小宠物时小宠物显示为"消失"。关闭后台节流，让被遮挡
     // 窗口持续渲染，移开遮挡后立刻恢复显示。
     win.webContents.setBackgroundThrottling(false);
+    // [诊断] 渲染进程 console 常开转发（定位"点走到哪边只有气泡、不动"这类问题）。
+    // 必须走 stderr：bridge 模式下本进程 stdout 是 dsh-pet-bridge 协议通道，宿主只按 debug
+    // 级别记录非协议行（helper-process.ts onStdoutChunk），而 stderr 会被宿主当告警原样打印
+    // （同文件 child.stderr.on('data') → logger.warn）。
+    win.webContents.on('console-message', (event) => {
+      console.error(`[renderer:${event.level}] ${event.message}`);
+    });
     // 屏蔽 Electron 默认右键菜单：右键菜单由渲染端统一自绘组件弹出（两端一致），绝无双菜单
     win.webContents.on('context-menu', (event) => event.preventDefault());
     // 页面级缩放 = petScale()（渲染端 CONFIG.scale 的同一来源）：整窗内容统一放大，渲染端坐标系
@@ -473,28 +501,47 @@ function createPetWindows() {
     // 唯一不可自行决定的事：**渲染端正拿着鼠标输入时不得翻回穿透**（见 inputBusy）。
     // 本进程无从判断这件事——光看光标位置与窗口位移分不清"拖拽跟手"和"漫游/抛掷"，所以由渲染端上报。
     // [local patch F] 光标位置广播：渲染端只有指针悬停命中区时才收得到 mousemove，
-    // 「鼠标接近时看向鼠标」需要全屏光标位置，所以复用同一个 60ms 定时器把真实光标推给渲染端
+    // 「鼠标接近时看向鼠标」需要全屏光标位置，所以复用同一个定时器把真实光标推给渲染端
     // （screen.getCursorScreenPoint() 与 win.getBounds() 同为 CSS/DIP 系，渲染端不再 ÷scale）。
+    // 该定时器的间隔有输入时是 60ms、静止后退避到 POINTER_IDLE_MS（见上面的 local patch）。
     const lastCursor = { x: NaN, y: NaN };
-    const pushCursor = () => {
+    let pointerTimer = null;
+    // [local patch pointer-idle-backoff@1] 连续「没发生任何变化」的 tick 数，见 POINTER_IDLE_MS
+    let pointerIdleTicks = 0;
+    // 一个 tick：读**一次**真实光标（原来这个 tick 读两次：pushCursor 一次、兜底判定又一次，
+    // 合并成一次），广播光标 + 必要时翻转穿透，并按「有没有变化」自适应下一次的间隔。
+    const pointerTick = () => {
       if (win.isDestroyed()) return;
       const p = screen.getCursorScreenPoint();
-      if (p.x === lastCursor.x && p.y === lastCursor.y) return; // 没动就不发，省 IPC
-      lastCursor.x = p.x;
-      lastCursor.y = p.y;
-      win.webContents.send('pet:cursor', { x: p.x, y: p.y });
+      const moved = p.x !== lastCursor.x || p.y !== lastCursor.y;
+      if (moved) {
+        lastCursor.x = p.x;
+        lastCursor.y = p.y;
+        win.webContents.send('pet:cursor', { x: p.x, y: p.y }); // 没动就不发，省 IPC
+      }
+      let flipped = false;
+      // 兜底判定不受 pointerFallbackPaused 影响的是「推光标」那一半（菜单/弹窗开着时也要能看向光标）；
+      // 翻转这一半冒烟期间必须停，否则会按真实光标把 windowIgnore 翻回来、干扰冒烟断言。
+      if (!pointerFallbackPaused) {
+        const b = win.getBounds();
+        if (b.width >= 8 && b.height >= 8) {
+          // 尺寸还没落定（renderer 首帧上报前）时不翻转
+          const ignoring = windowIgnore.get(win.id) !== false;
+          const next = decideWindowIgnore(b, p, ignoring, inputBusy.get(win.id) === true);
+          if (next !== ignoring) {
+            setWindowIgnore(win, next);
+            flipped = true;
+          }
+        }
+      }
+      pointerIdleTicks = moved || flipped ? 0 : pointerIdleTicks + 1;
+      // 真静止了这么久才退避；光标一动 / 状态一翻，立刻回到 60ms
+      const idle = POINTER_IDLE_MS > 0 && pointerIdleTicks * POINTER_POLL_MS >= POINTER_IDLE_AFTER_MS;
+      pointerTimer = setTimeout(pointerTick, idle ? POINTER_IDLE_MS : POINTER_POLL_MS);
     };
-    const pointerTimer = setInterval(() => {
-      pushCursor(); // 不受 pointerFallbackPaused 影响：菜单/弹窗开着时也要能看向光标
-      if (pointerFallbackPaused || win.isDestroyed()) return;
-      const b = win.getBounds();
-      if (b.width < 8 || b.height < 8) return; // 尺寸还没落定（renderer 首帧上报前）
-      const ignoring = windowIgnore.get(win.id) !== false;
-      const next = decideWindowIgnore(b, screen.getCursorScreenPoint(), ignoring, inputBusy.get(win.id) === true);
-      if (next !== ignoring) setWindowIgnore(win, next);
-    }, POINTER_POLL_MS);
+    pointerTimer = setTimeout(pointerTick, POINTER_POLL_MS);
     win.on('closed', () => {
-      clearInterval(pointerTimer);
+      clearTimeout(pointerTimer);
       windows.delete(pet.id);
       lastRequestedBounds.delete(win.id);
       windowIgnore.delete(win.id);
@@ -601,8 +648,53 @@ function startBridgeCallback() {
   return server;
 }
 
+/* [local patch idle-gate@1] 无人互动上报：把「系统键鼠已经空闲多少秒」作为**单向通知**推给宿主。
+ * 为什么必须在这里：宿主半侧是纯 Node，拿不到任何系统输入信息 —— 唯一能答「现在还有没有人在用
+ * 这台电脑」的地方就是本进程（Electron powerMonitor.getSystemIdleTime()）。宿主拿这条信号决定
+ * 「待机时停不停那个 5s 一次的屏幕监测 tick」（见 lib/index.js 的同名补丁与 lib/idle-signal.js）。
+ * 协议：一行 BRIDGE_PREFIX + {notice:'idle', idleSec}，**不带 id** ⇒ 宿主按通知处理，不需要应答通道
+ * （helper-process.ts 的 handleBridgeLine 里 `typeof req.id !== 'number'` 那一支）。
+ * 发送策略（宿主记「到达时刻 + 那一刻的空闲秒数」再自行外推，见 idle-signal.js）：
+ *   - 每秒看一次状态，只有「活跃 ↔ 空闲」**翻转**时才发 ⇒ 输入一恢复，宿主 ≤1s 就收到新值、
+ *     下一拍立刻恢复抓屏（宿主命中期间不更新 lastTick，就靠这一条）；
+ *   - 同状态每 IDLE_REFRESH_MS 补一条 ⇒ 防止「连续动键鼠十分钟」被宿主一路外推成「没人」
+ *     （宿主只按时间往上加，必须有个新值把它拉回来）。
+ * 只在 BRIDGE 模式跑：这说明 stdout 那头有宿主在读；没有宿主时写出去也没人看。 */
+/** 每秒探一次状态（给「输入一恢复 ≤1s 通知宿主」用的粒度；单次调用只是读一个系统计数器，很便宜） */
+const IDLE_POLL_MS = 1000;
+/** 同一状态下最多多久补报一次（防「持续活跃被外推成没人」） */
+const IDLE_REFRESH_MS = 30000;
+/** 系统空闲 ≥ 这个秒数即算「没人」。只用来分「刚动过 / 停了」，与宿主的 idleStopSec（默认 600s）不是一个量级 */
+const IDLE_EDGE_SEC = 5;
+function startIdleReporter() {
+  let lastState = '';
+  let lastSentAt = 0;
+  const timer = setInterval(() => {
+    let sec;
+    try {
+      sec = powerMonitor.getSystemIdleTime();
+    } catch (e) {
+      // 平台不支持（例如 Linux 上 X11 屏保扩展缺失）⇒ 停掉上报；宿主收不到值就会退回「不启用这道闸」
+      console.error(
+        '[dsh-pet-desktop-helper] idle monitor unavailable, stop reporting:',
+        String(e && e.message ? e.message : e),
+      );
+      clearInterval(timer);
+      return;
+    }
+    const value = Number.isFinite(sec) && sec > 0 ? sec : 0;
+    const state = value >= IDLE_EDGE_SEC ? 'idle' : 'active';
+    if (state !== lastState || Date.now() - lastSentAt >= IDLE_REFRESH_MS) {
+      lastState = state;
+      lastSentAt = Date.now();
+      process.stdout.write(BRIDGE_PREFIX + JSON.stringify({ notice: 'idle', idleSec: value }) + '\n');
+    }
+  }, IDLE_POLL_MS);
+  timer.unref?.();
+}
+
 /* [local patch O] 控制桥：给独立版控制台（<安装目录>\launcher）一个固定端口的本地口子。
- * 为什么需要它：权限、语音模式、活跃度、本地文本模型这些状态都躺在渲染进程的 localStorage 里，
+ * 为什么需要它：权限、活跃度、本地文本模型这些状态都躺在渲染进程的 localStorage 里，
  * 外部进程够不着；helper 自己的 IPC 又只有渲染端能用（preload 的 contextBridge）。
  * 这里只在 127.0.0.1 上开一个小服务：GET /state 读回 /set 写单个白名单键（可顺带 reload 让它生效）。
  * 端口从 3099 起顺延，落盘 $DSH_HOME/dsh-pet/helper-control.json 供控制台发现。
@@ -667,7 +759,7 @@ function startControlBridge() {
     } catch (e) {
       return { ok: false, reason: 'write-failed', message: String(e && e.message ? e.message : e) };
     }
-    // 渲染进程只在启动时把 localStorage 读进内存（sprite.js hookPcActions/hookVoiceMode 都只读一次），
+    // 渲染进程只在启动时把 localStorage 读进内存（sprite.js hookPcActions 都只读一次），
     // 所以写盘之后要重载才真的生效 —— 这一步是"改权限/语音立刻管用"的关键。
     if (reload) for (const [, w] of liveWindows()) w.webContents.reload();
     return { ok: true, key, reloaded: !!reload };
@@ -867,7 +959,8 @@ app.whenReady().then(() => {
       }),
     );
     startBridgeCallback(); // 宿主应答回调服务器（stdin 在 Electron 主进程不可用，改走本地 HTTP）
-    startControlBridge(); // [local patch O] 控制台专用控制桥（权限 / 语音模式等 localStorage 状态）
+    startControlBridge(); // [local patch O] 控制台专用控制桥（权限等 localStorage 状态）
+    startIdleReporter(); // [local patch idle-gate@1] 把系统空闲秒数单向报给宿主（决定待机时停不停屏幕监测）
   }
 
   createPetWindows();
@@ -1523,465 +1616,6 @@ ipcMain.handle('pet:open-target', async (event, payload) => {
   }
 });
 
-/* [local patch Z] obs-rec@1 —— 「让她替我打开 OBS 录屏 / 我说停止就停下」。
- *
- * 边界（与 [local patch P] 的权限口径一致）：
- *   - 渲染端**只能传动作动词**（开始/停止/查状态）。OBS 可执行文件路径、websocket 端口、
- *     连接密码全部由 obs-ctl.js 从**本机 OBS 自己的配置**里读，渲染端一个都给不了。
- *   - 录屏文件名/格式/编码器/保存目录**完全用 OBS 自己的设置**（主人明确要求的），
- *     我们只发 StartRecord / StopRecord，不碰任何 Output 设置、不改 OBS 的任何配置。
- *   - 不执行用户可控命令、不传 shell。OBS 没开时才拉起它（最小化到托盘，不抢焦点）。
- *   - 日志一律走 stderr：本进程的 stdout 是给宿主 bridge 用的 JSON 行协议，绝不能污染。
- */
-function obsLog(msg) {
-  try { process.stderr.write('[dsh-pet obs] ' + msg + '\n'); } catch { /* 管道没了就算了 */ }
-}
-
-ipcMain.handle('pet:rec-start', async () => {
-  try {
-    const r = await obsCtl.start();
-    if (r && r.ok === true) {
-      obsLog('起录成功 already=' + !!r.already + ' 拉了OBS=' + !!r.startedObs + ' OBS起来用了' + (r.obsStartMs || 0) + 'ms 试了' + (r.tries || 1) + '次');
-      return { ok: true, already: !!r.already, startedObs: !!r.startedObs, obsStartMs: r.obsStartMs || 0 };
-    }
-    obsLog('起录失败：' + ((r && r.error) || 'unknown'));
-    return { ok: false, error: String((r && r.error) || 'rec-start-failed'), startedObs: !!(r && r.startedObs) };
-  } catch (e) {
-    obsLog('起录异常：' + ((e && e.message) || e));
-    return { ok: false, error: String((e && e.message) || e) };
-  }
-});
-
-ipcMain.handle('pet:rec-stop', async () => {
-  try {
-    const r = await obsCtl.stop();
-    if (r && r.ok === true) {
-      obsLog('停录成功 already=' + !!r.already + ' 文件=' + (r.path || '(没返回路径)'));
-      return { ok: true, already: !!r.already, path: String(r.path || '') };
-    }
-    obsLog('停录失败：' + ((r && r.error) || 'unknown'));
-    return { ok: false, error: String((r && r.error) || 'rec-stop-failed') };
-  } catch (e) {
-    obsLog('停录异常：' + ((e && e.message) || e));
-    return { ok: false, error: String((e && e.message) || e) };
-  }
-});
-
-ipcMain.handle('pet:rec-status', async () => {
-  try {
-    const r = await obsCtl.status();
-    return r && r.ok === true
-      ? { ok: true, running: !!r.running, recording: !!r.recording, timecode: String(r.timecode || '') }
-      : { ok: false, error: String((r && r.error) || 'rec-status-failed') };
-  } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) };
-  }
-});
-
-/* [local patch V] 语音模式（本机离线转写）—— 两件事：
- *   ① media 权限门控：**只在语音模式开着时**才给麦克风权限（默认关），其余权限一律不给。
- *      注册放在 IPC handler 里而不是模块顶层：session.defaultSession 必须等 app ready 才能碰。
- *   ② node 子进程转发：SenseVoice 的原生 addon 在 Electron 里加载会抛
- *      "External buffers are not allowed"（实测），只能交给真正的 node.exe。
- *      spawn 的是「固定 node 路径 + 固定 worker 脚本」，**不接受任何用户可控的命令/参数**、
- *      不走 shell（shell:false）。渲染端只传 16kHz Float32 PCM，落到 os.tmpdir() 的临时 wav，
- *      转写完**一定**删掉（voiceCleanup 只删自己造的 dsh-pet-voice-* 文件）。
- * 明确不做：不联网、不上传音频、不起别的进程、不写别的文件。 */
-const VOICE = { on: false, bound: false, proc: null, seq: 0, pending: new Map(), nodeExe: null, stderr: '' };
-
-/** 候选 node.exe：先用已验证的 DSH 运行时，再兜底系统 node。
- *  **绝不用 process.execPath** —— 那是 Electron，加载不了这个 addon。 */
-function voiceCandidateNodes() {
-  const os = require('node:os');
-  const path = require('node:path');
-  const fs = require('node:fs');
-  const out = [];
-  if (process.env.DSH_PET_NODE) out.push(process.env.DSH_PET_NODE);
-  const homes = [process.env.DSH_HOME, path.join(os.homedir(), '.dsh')].filter(Boolean);
-  for (const h of homes) {
-    out.push(path.join(h, 'dsh-runtimes', 'dsh-primary-runtime', 'dependencies', 'node', 'bin', 'node.exe'));
-    try {
-      const base = path.join(h, 'dsh-runtimes');
-      for (const d of fs.readdirSync(base)) out.push(path.join(base, d, 'dependencies', 'node', 'bin', 'node.exe'));
-    } catch {
-      /* 没有这个目录就继续试下一个候选 */
-    }
-  }
-  // [no-hardcode] 包内 node 一律**从运行时位置推导**，绝不写死某一台开发机的盘符路径。
-  // 发行版布局：<安装根>\electron\electron.exe 与 <安装根>\node\bin\node.exe 是兄弟目录。两种锚点：
-  //   process.execPath      = <安装根>\electron\electron.exe  → 两级 dirname 回到 <安装根>
-  //   process.resourcesPath = <安装根>\electron\resources（打包后 <安装根>\resources）
-  //                           → 一级（打包形态）或两级（源码形态）dirname 回到 <安装根>
-  // 每个锚点都把「上一级/上两级」都当根试一遍：多的候选只是一次 existsSync，猜错也不会用错路径。
-  const roots = [];
-  for (const anchor of [process.execPath, process.resourcesPath]) {
-    if (!anchor) continue;
-    roots.push(path.dirname(anchor), path.dirname(path.dirname(anchor)));
-  }
-  for (const root of roots) {
-    out.push(path.join(root, 'node', 'bin', 'node.exe'));
-    out.push(path.join(root, 'node', 'node.exe'));
-  }
-  out.push(path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe'));
-  return out;
-}
-
-function voiceFindNode() {
-  const fs = require('node:fs');
-  if (VOICE.nodeExe) return VOICE.nodeExe;
-  for (const p of voiceCandidateNodes()) {
-    try {
-      if (p && fs.existsSync(p)) {
-        VOICE.nodeExe = p;
-        return p;
-      }
-    } catch {
-      /* 单个候选探测失败不影响其它 */
-    }
-  }
-  return null;
-}
-
-/** media 权限：只有语音模式开着才放行，其余一律拒绝；幂等。 */
-function voiceBindPermission() {
-  if (VOICE.bound) return;
-  VOICE.bound = true;
-  try {
-    const ses = session.defaultSession;
-    ses.setPermissionRequestHandler((wc, permission, callback) => {
-      callback(permission === 'media' && VOICE.on);
-    });
-    ses.setPermissionCheckHandler((wc, permission) => permission === 'media' && VOICE.on);
-  } catch (e) {
-    console.error('[dsh-pet] 语音权限门控注册失败：' + String((e && e.message) || e));
-  }
-}
-
-/** Float32 PCM → 44 字节头的小端 RIFF WAV（16kHz 单声道 16bit）。 */
-function voiceWavBuffer(samples, rate) {
-  const buf = Buffer.alloc(44 + samples.length * 2);
-  buf.write('RIFF', 0, 'ascii');
-  buf.writeUInt32LE(36 + samples.length * 2, 4);
-  buf.write('WAVE', 8, 'ascii');
-  buf.write('fmt ', 12, 'ascii');
-  buf.writeUInt32LE(16, 16);
-  buf.writeUInt16LE(1, 20);
-  buf.writeUInt16LE(1, 22);
-  buf.writeUInt32LE(rate, 24);
-  buf.writeUInt32LE(rate * 2, 28);
-  buf.writeUInt16LE(2, 32);
-  buf.writeUInt16LE(16, 34);
-  buf.write('data', 36, 'ascii');
-  buf.writeUInt32LE(samples.length * 2, 40);
-  for (let i = 0; i < samples.length; i++) {
-    const v = Math.max(-1, Math.min(1, samples[i]));
-    buf.writeInt16LE(Math.round(v * 32767), 44 + i * 2);
-  }
-  return buf;
-}
-
-function voiceTempFile() {
-  const os = require('node:os');
-  const path = require('node:path');
-  return path.join(os.tmpdir(), 'dsh-pet-voice-' + Date.now() + '-' + Math.floor(Math.random() * 1000000) + '.wav');
-}
-
-/** 只删我们自己造的临时文件（文件名前缀必须对得上，别的路径一律不碰）。 */
-function voiceCleanup(file) {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  if (!file || path.basename(file).indexOf('dsh-pet-voice-') !== 0) return;
-  try {
-    fs.unlinkSync(file);
-  } catch {
-    /* 已经没了就算了 */
-  }
-}
-
-function voiceFailAll(reason) {
-  for (const p of VOICE.pending.values()) {
-    clearTimeout(p.timer);
-    try {
-      p.reject(new Error(reason));
-    } catch {
-      /* resolve/reject 竞态忽略 */
-    }
-  }
-  VOICE.pending.clear();
-}
-
-function voiceStartWorker() {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  if (VOICE.proc) return VOICE.proc;
-  const exe = voiceFindNode();
-  if (!exe) {
-    // 交给渲染端的是**稳定错误码**（no-node-runtime，渲染端按它给提示），但 stderr 上必须把
-    // 「找了哪些地方」说清楚：只报一句「语音不能用」时，用户/售后根本不知道缺的是哪个文件。
-    console.error(
-      '[dsh-pet helper] 找不到可用的 node.exe：语音识别要它来跑包内 stt-worker（Electron 自身加载不了该原生 addon）。已尝试的候选：\n  ' +
-        voiceCandidateNodes().join('\n  '),
-    );
-    throw new Error('no-node-runtime');
-  }
-  const worker = path.join(__dirname, 'stt-worker.mjs');
-  if (!fs.existsSync(worker)) throw new Error('worker-missing');
-  const { spawn } = require('node:child_process');
-  const env = Object.assign({}, process.env);
-  delete env.ELECTRON_RUN_AS_NODE;
-  const proc = spawn(exe, [worker], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, shell: false, env });
-  let buf = '';
-  proc.stdout.setEncoding('utf8');
-  proc.stdout.on('data', (chunk) => {
-    buf += chunk;
-    let nl = buf.indexOf('\n');
-    while (nl >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      nl = buf.indexOf('\n');
-      if (!line) continue;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue; // worker 保证 stdout 只有协议行；解析不了就忽略，绝不因此崩
-      }
-      const p = VOICE.pending.get(msg.id);
-      if (!p) continue;
-      VOICE.pending.delete(msg.id);
-      clearTimeout(p.timer);
-      if (msg.ok) p.resolve({ ok: true, text: String(msg.text || ''), lang: String(msg.lang || ''), ms: Number(msg.ms) || 0 });
-      else p.resolve({ ok: false, error: String(msg.error || 'worker-error') });
-    }
-  });
-  proc.stderr.setEncoding('utf8');
-  proc.stderr.on('data', (c) => {
-    VOICE.stderr = (VOICE.stderr + String(c)).slice(-2000);
-  });
-  const die = () => {
-    if (VOICE.proc !== proc) return;
-    VOICE.proc = null;
-    voiceFailAll('worker-died');
-  };
-  proc.on('error', die);
-  proc.on('exit', die);
-  VOICE.proc = proc;
-  return proc;
-}
-
-function voiceRequest(wav, timeoutMs, lang) {
-  return new Promise((resolve, reject) => {
-    let proc;
-    try {
-      proc = voiceStartWorker();
-    } catch (e) {
-      reject(new Error(String((e && e.message) || e)));
-      return;
-    }
-    const id = ++VOICE.seq;
-    const timer = setTimeout(() => {
-      VOICE.pending.delete(id);
-      if (VOICE.proc === proc) {
-        VOICE.proc = null;
-        try {
-          proc.kill();
-        } catch {
-          /* 已经死了 */
-        }
-      }
-      reject(new Error('worker-timeout'));
-    }, timeoutMs || 10000);
-    VOICE.pending.set(id, { timer, resolve, reject: (e) => reject(e instanceof Error ? e : new Error(String(e))) });
-    try {
-      proc.stdin.write(JSON.stringify({ id, cmd: 'transcribe', wav, lang: lang === 'auto' ? 'auto' : 'zh' }) + '\n');
-    } catch (e) {
-      clearTimeout(timer);
-      VOICE.pending.delete(id);
-      reject(new Error('worker-failed'));
-    }
-  });
-}
-
-/** 渲染端送来的 PCM → Float32Array（只认 Float32Array / 数字数组 / 其它 TypedArray 视图）。
- *  抽成一个函数是为了两处共用（转写、自检留录音），也为了它能被单独测。 */
-function voiceToSamples(pcm) {
-  if (pcm instanceof Float32Array) return pcm;
-  if (Array.isArray(pcm)) return Float32Array.from(pcm);
-  if (pcm && ArrayBuffer.isView(pcm)) return new Float32Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 4)).slice(0);
-  return new Float32Array(0);
-}
-
-async function voiceTranscribePcm(pcm, lang) {
-  const fs = require('node:fs');
-  const samples = voiceToSamples(pcm);
-  const want = lang === 'auto' ? 'auto' : 'zh'; // 只认这两个值，别的当 zh（不给渲染端传任意字符串的机会）
-  if (!samples.length) return { ok: false, error: 'empty-audio' };
-  const file = voiceTempFile();
-  try {
-    fs.writeFileSync(file, voiceWavBuffer(samples, 16000));
-    let r;
-    try {
-      r = await voiceRequest(file, 10000, want);
-    } catch (e) {
-      const why = String((e && e.message) || e);
-      if (why === 'no-node-runtime' || why === 'worker-missing' || why === 'worker-timeout') return { ok: false, error: why };
-      // worker 崩过一次：清干净再试一次（模型冷启 ~2.5s，第二次一般就好）
-      try {
-        r = await voiceRequest(file, 15000, want);
-      } catch (e2) {
-        const why2 = String((e2 && e2.message) || e2);
-        return { ok: false, error: why2 === 'no-node-runtime' || why2 === 'worker-missing' ? why2 : 'worker-failed' };
-      }
-    }
-    return r;
-  } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) };
-  } finally {
-    voiceCleanup(file);
-  }
-}
-
-/** 语音链路日志落盘（诊断"我说了话她没反应"到底断在哪一步）。
- *  **路径写死在这里，且这个函数不接受任何参数** —— 这是唯一一处渲染端能触发的写盘，
- *  路径一旦可控就等于给页面开了个任意写口子。ring buffer ≤60 条，整段重写，人不看的时候也不会长胖。
- *  值得写的理由：这次报障时盘上一条记录都没有，只能靠猜；有了它，麦克风送没送进来声音、
- *  引擎报没报错、听成了什么，事后一眼能看出来。 */
-function voiceLogPath() {
-  // [发布版补丁 P1] 原来写死成一个固定的家目录路径（%USERPROFILE%\.dsh\...）：现在跟着数据根走
-  const os = require('node:os');
-  return path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'dsh-pet', 'screen-watch', 'voice-log.json');
-}
-
-/** 只留我们认识的 9 个字段（ts/device/rms/voicedMs/speechMs/gain/heard/route/dropped），
- *  渲染端塞别的键一律不进盘；字符串字段去掉换行并截断，避免把日志写成一大坨。 */
-function voiceLogClean(raw) {
-  const src = raw && typeof raw === 'object' ? raw : {};
-  const str = (v, n) => {
-    if (v === null || v === undefined) return null;
-    const s = String(v).replace(/[\r\n]+/g, ' ').slice(0, n);
-    return s || null;
-  };
-  const num = (v) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? Math.round(n * 10000) / 10000 : 0;
-  };
-  const ts = Number(src.ts);
-  const gain = num(src.gain);
-  return {
-    ts: Number.isFinite(ts) && ts > 0 ? Math.round(ts) : Date.now(),
-    device: str(src.device, 40) || '默认麦克风',
-    rms: num(src.rms),
-    voicedMs: Math.round(num(src.voicedMs)),
-    // v6：Silero VAD 判出的"真语音"毫秒数（0 = 一句人声都没有）。**没给就是 null**，不能补成 0：
-    // 补 0 等于替渲染端撒谎说"VAD 测过了、是 0"。给了但不是数（NaN/字符串）也记 null（不知道就别编）；
-    // 只有真给了数字才 clamp 到非负整数（负数/小数都是我们自己的脏数据，夹回合法区间）。
-    speechMs: src.speechMs === null || src.speechMs === undefined || !Number.isFinite(Number(src.speechMs))
-      ? null
-      : Math.max(0, Math.round(Number(src.speechMs))),
-    // B 段增益：保留 2 位小数；没给/非正数当 1（= 没放大，如实）
-    gain: Math.round((gain > 0 ? gain : 1) * 100) / 100,
-    heard: str(src.heard, 200),
-    route: src.route === 'intent' || src.route === 'chat' ? src.route : 'none',
-    dropped: str(src.dropped, 60),
-  };
-}
-
-/** ring buffer：最多 60 条，新的一律在后面，超了丢最老的那条。 */
-function voiceLogPush(list, entry) {
-  const MAX = 60;
-  const out = (Array.isArray(list) ? list.slice(-(MAX - 1)) : []).concat([entry]);
-  return out.slice(-MAX);
-}
-
-function voiceLogAppend(raw) {
-  const fs = require('node:fs');
-  const entry = voiceLogClean(raw);
-  let list = [];
-  try {
-    const parsed = JSON.parse(fs.readFileSync(voiceLogPath(), 'utf8'));
-    if (Array.isArray(parsed)) list = parsed;
-  } catch {
-    list = []; // 不存在/坏了都从空开始：日志绝不能影响语音链路
-  }
-  const next = voiceLogPush(list, entry);
-  fs.writeFileSync(voiceLogPath(), JSON.stringify(next, null, 2));
-  return { ok: true, n: next.length };
-}
-
-/** 自检留录音的固定路径（**写死、不接受任何参数** —— 和 voiceLogPath 同一条纪律：
- *  路径一旦能被渲染端影响，就等于给它开了个任意写口子）。 */
-function voiceSelfTestPath() {
-  // [发布版补丁 P2] 同 P1：路径跟着数据根走，仍然写死在一个函数里、不接受任何参数
-  const os = require('node:os');
-  return path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'dsh-pet', 'screen-watch', 'voice-selftest.wav');
-}
-
-/** 自检留录音：把这段**原始**（未加增益）16kHz 单声道 PCM 覆盖成 wav。
- *  只写 voiceSelfTestPath() 这一个路径；目录不在/写不进就如实回失败（**不 mkdir**、不改别的东西）。 */
-function voiceSelfTestWav(pcm) {
-  const fs = require('node:fs');
-  const samples = voiceToSamples(pcm);
-  if (!samples.length) return { ok: false, error: 'empty-audio' };
-  const buf = voiceWavBuffer(samples, 16000);
-  fs.writeFileSync(voiceSelfTestPath(), buf);
-  return { ok: true, bytes: buf.length, path: voiceSelfTestPath() };
-}
-
-ipcMain.handle('pet:voice-mode', (event, payload) => {
-  // 门控必须在渲染端 getUserMedia **之前**注册好：渲染端先 setVoiceMode(true) 再要麦克风
-  const on = !!(payload && payload.on);
-  VOICE.on = on;
-  voiceBindPermission();
-  if (!on) {
-    const proc = VOICE.proc;
-    VOICE.proc = null;
-    voiceFailAll('worker-stopped');
-    if (proc) {
-      try {
-        proc.stdin.write(JSON.stringify({ cmd: 'quit' }) + '\n');
-      } catch {
-        /* 管道已断 */
-      }
-      setTimeout(() => {
-        try {
-          proc.kill();
-        } catch {
-          /* 已经退出 */
-        }
-      }, 400);
-    }
-  }
-  return { ok: true, on: VOICE.on, node: VOICE.on ? voiceFindNode() : null };
-});
-
-ipcMain.handle('pet:voice-transcribe', async (event, payload) => {
-  const pcm = payload && payload.pcm;
-  const lang = payload && payload.lang; // 只认 'zh' / 'auto'，收口在 voiceTranscribePcm 里
-  try {
-    return await voiceTranscribePcm(pcm, lang);
-  } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) };
-  }
-});
-
-ipcMain.handle('pet:voice-log', (event, payload) => {
-  // 渲染端只说「这一段听到了什么」；路径由 voiceLogPath() 写死，payload 里没有也不接受任何路径
-  try {
-    return voiceLogAppend(payload);
-  } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) }; // 写不进去就如实回，不假装成功
-  }
-});
-
-ipcMain.handle('pet:voice-selftest-wav', (event, payload) => {
-  // 自检留录音：payload 只给 PCM；落盘路径写死在 voiceSelfTestPath()，不接受文件名
-  try {
-    return voiceSelfTestWav(payload && payload.pcm);
-  } catch (e) {
-    return { ok: false, error: String((e && e.message) || e) };
-  }
-});
-
 /* [local patch T] 语音输出（TTS）：把她的回话念出来（Edge 朗读：联网、免费、无 Key）
  * 为什么长这样（tts-proto/TTS-SPEC.md 的实测结论，别改回去）：
  *   ① 端点只认 mp3 输出（audio-24khz-48kbitrate-mono-mp3），pcm 一律 "Unsupported Edge output format"；
@@ -1992,14 +1626,14 @@ ipcMain.handle('pet:voice-selftest-wav', (event, payload) => {
  *   ④ 主进程本身就是 Node ⇒ **不 spawn、不落盘**：mp3 在内存里合成，Buffer 原样回渲染层，
  *      由 decodeAudioData 播放（渲染端仍然不碰 fs，"唯一 spawn"那条不变量一个字都没动）。
  * 出错一律 return {ok:false,error}（绝不抛）：渲染端据此如实说"连不上朗读服务"。
- * 明确不做：不克隆音色、不写缓存文件、不起子进程、不碰麦克风/权限。 */
+ * 明确不做：不克隆音色、不写缓存文件、不起子进程、不碰权限。 */
 
 const TTS_TLS = require('node:tls');
 const TTS_CRYPTO = require('node:crypto');
 
 const TTS_TRUSTED_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const TTS_CHROMIUM_FULL_VERSION = '143.0.3650.75';
-const TTS_SEC_MS_GEC_VERSION = '1-' + TTS_CHROMIUM_FULL_VERSION;
+const TTS_SEC_MS_GEC_VERSION = '2-' + TTS_CHROMIUM_FULL_VERSION; // [local patch T4] 2026-10 起端点要求 2- 前缀（1- 一律 403，见 edge-tts #507）
 const TTS_MAX_TEXT = 200;   // 一句的上限（切句在渲染端做）：太长又慢又容易被端点截
 const TTS_MAX_INFLIGHT = 2; // 同时最多 2 句在合成：正好对上渲染端的预取 2 句
 const TTS_HEADERS = {
@@ -2010,19 +1644,144 @@ const TTS_HEADERS = {
   'Accept-Encoding': 'gzip, deflate, br, zstd',
   'Accept-Language': 'en-US,en;q=0.9',
 };
-// 音色白名单（菜单只放 6 个中文音色，这里按 SPEC 收全 8 个：渲染端给别的值一律回落默认）
+// 音色白名单：收全端点当前全部 14 个中文音色（2026-10 实测 voices/list；微软没有更多中文音色了，
+// 渲染端给表外的值一律回落默认晓伊）。粤语/台湾腔的 SSML xml:lang 由 ttsBuildSsml 按 voice 推导。
 const TTS_VOICES = [
   'zh-CN-XiaoyiNeural', 'zh-CN-XiaoxiaoNeural', 'zh-CN-YunxiNeural', 'zh-CN-YunxiaNeural',
   'zh-CN-YunyangNeural', 'zh-CN-YunjianNeural', 'zh-CN-liaoning-XiaobeiNeural', 'zh-CN-shaanxi-XiaoniNeural',
+  'zh-HK-HiuMaanNeural', 'zh-HK-HiuGaaiNeural', 'zh-HK-WanLungNeural',
+  'zh-TW-HsiaoChenNeural', 'zh-TW-YunJheNeural', 'zh-TW-HsiaoYuNeural',
 ];
 
-/** 与 edge-tts（python）逐位一致：ticks 乘 1e7 后超过 2^53，float64 会把尾数舍入，
- *  所以必须用 float64 复现（用 BigInt 精确整数会被端点判 403）。 */
-function ttsSecMsGec(nowMs) {
+/* [local patch T4] Sec-MS-GEC v2（2026-10 起端点只认 v2，旧 SHA-256 token 一律 403）：
+ * token 变成 "CS64 摘要-SHA256 摘要"，两个摘要都吃同一串 ticks+TrustedToken，
+ * 其中"SHA256"是端点私改版（K 表插了 0xE49B69C1/0xA81A664B 两个外来常量、
+ * K[14] 换成 0xC9DC06A7、前 7 字节吸收进初始状态），照 edge-tts 7.3 drm.py 逐位移植。
+ * ticks 仍按 float64 复现 python 舍入（旧坑不变）；实现用 BigInt，一次计算 <1ms。 */
+function ttsSecMsGecV2(nowMs) {
+  const M = 0xffffffffn;
+  const rol16 = (v) => { v &= M; return ((v << 16n) | (v >> 16n)) & M; };
+  const sig0 = (v) => ((v >> 7n) ^ (v << 25n) ^ (v >> 18n) ^ (v << 14n) ^ (v >> 3n)) & M;
+  const sig1 = (v) => ((v >> 17n) ^ (v << 15n) ^ (v >> 19n) ^ (v << 13n) ^ (v >> 10n)) & M;
+  const K = [/* 端点私改版 K 表（含插入的外来常量，勿"纠正"回标准表） */
+    0x428a2f98n,0x71374491n,0xb5c0fbcfn,0xe9b5dba5n,0x3956c25bn,0x59f111f1n,0x923f82a4n,0xab1c5ed5n,
+    0xd807aa98n,0x12835b01n,0x243185ben,0x550c7dc3n,0x72be5d74n,0x80deb1fen,0x9bdc06a7n,0xc19bf174n,
+    0xe49b69c1n,0xefbe4786n,0x0fc19dc6n,0x240ca1ccn,0x2de92c6fn,0x4a7484aan,0x5cb0a9dcn,0x76f988dan,0x983e5152n,
+    0xa831c66dn,0xb00327c8n,0xbf597fc7n,0xc6e00bf3n,0xd5a79147n,0x06ca6351n,0x14292967n,0x27b70a85n,
+    0x2e1b2138n,0x4d2c6dfcn,0x53380d13n,0x650a7354n,0x766a0abbn,0x81c2c92en,0x92722c85n,0xa2bfe8a1n,
+    0xa81a664bn,0xc24b8b70n,0xc76c51a3n,0xd192e819n,0xd6990624n,0xf40e3585n,0x106aa070n,0x19a4c116n,
+    0x1e376c08n,0x2748774cn,0x34b0bcb5n,0x391c0cb3n,0x4ed8aa4an,0x5b9cca4fn,0x682e6ff3n,0x748f82een,
+    0x78a5636fn,0x84c87814n,0x8cc70208n,0x90befffan,0xa4506cebn,0xbef9a3f7n,0xc67178f2n].map(BigInt);
+  const K14 = 0xc9dc06a7n; // K[14] 被换成这个（标准是 0x9bdc06a7）
+  const KR = K.slice(0, 14).concat([K14], K.slice(15));
+  const SCHED14 = [0xeb24bf9en,0x1558691fn,0xa0c09ee2n,0x0cfa32ban,0xa622ee8cn,0xd1dd9491n,0xc0dd25a0n,0xf9e70ab6n,0xf0c31573n,0x7058ce4en,0x7188e606n,0x00e5ab33n,0xd258b060n,0x72766564n].map(BigInt);
+  const IV = [0x6a09e667n,0xbb67ae85n,0x3c6ef372n,0xa54ff53an,0x510e527fn,0x9b05688cn,0x1f83d9abn,0x5be0cd19n].map(BigInt);
+  const ST0 = [0xfd9fbea2n,0x91243ce7n,0xbe499094n,0xcd2e1e0an,0x6c006f49n,0x04bd35abn,0xfeb0a7e4n,0x03effbd2n].map(BigInt);
+  const SIG0A = 0x059c0b80n, SIG1A = 0x000b92c0n;
+  const CS = [[0xe82e91b1n,0xb32700d0n],[0x44de24c6n,0x88dff51dn],[0x3beb65bcn,0x29514038n],[0xc89c5933n,0xb328cbdfn],[0x8d1ec211n,0xd405b4d5n],[0x314ef5d5n,0x26e55f3cn],[0xe92491b1n,0x607801c6n],[0xf0a5b9d5n,0x82b2c1fbn],[0x06064cf3n,0xfa51a3dan],[0xda79fa60n,0x207cc464n],[0xbed20560n,0x3c3c74f3n],[0x89f9c9f8n,0xd2d14b61n],[0x35fa38c6n,0xbb04a2c1n],[0xcb49e3c6n,0xc5626167n]].map((p) => p.map(BigInt));
+  const CSF = 0x82893933n, CSA0 = 0xf2f90b1an, CSA1 = 0x0b1a0000n;
+
+  function rounds(state, words, first) {
+    let [a, b, c, d, e, f, g, h] = state;
+    const table = first === 14 ? KR : K; // 只有 init 的尾部段用替换过 K[14] 的表，块循环用原表
+    const aligned = Math.min(64, Math.floor((first + 7) / 8) * 8);
+    const one = (i) => {
+      const rE = (e << 32n) | e, rA = (a << 32n) | a;
+      const t1 = (h + ((rE >> 6n) ^ (rE >> 11n) ^ (rE >> 25n)) + (g ^ (e & (f ^ g))) + table[i] + words[i]) & M;
+      const t2 = (((rA >> 2n) ^ (rA >> 13n) ^ (rA >> 22n)) + ((a & b) | (c & (a | b)))) & M;
+      [a, b, c, d, e, f, g, h] = [(t1 + t2) & M, a, b, c, (d + t1) & M, e, f, g];
+    };
+    for (let i = first; i < aligned; i++) one(i);
+    for (let i = aligned; i < 64; i += 8) { one(i); one(i + 1); one(i + 2); one(i + 3); one(i + 4); one(i + 5); one(i + 6); one(i + 7); }
+    return [a, b, c, d, e, f, g, h];
+  }
+  function expand(words, first) {
+    for (let i = first; i < 64; i++) {
+      const x = words[i - 2], y = words[i - 15];
+      words.push((((x >> 17n) ^ (x << 15n) ^ (x >> 19n) ^ (x << 13n) ^ (x >> 10n)) + words[i - 7] +
+        ((y >> 7n) ^ (y << 25n) ^ (y >> 18n) ^ (y << 14n) ^ (y >> 3n)) + words[i - 16]) & M);
+    }
+  }
+  function digest(data) {
+    const init = (p7) => {
+      const w = Array(14).fill(0n);
+      w[14] = BigInt(p7.readUIntBE(0, 3)); w[15] = BigInt(p7.readUInt32BE(3));
+      for (let i = 16; i < 30; i++) {
+        let v = SCHED14[i - 16];
+        if (i === 16) v += sig1(w[14]) ^ SIG1A; else if (i - 2 >= 14) v += sig1(w[i - 2]);
+        if (i - 7 >= 14) v += w[i - 7];
+        if (i === 29) v += sig0(w[14]) ^ SIG0A; else if (i - 15 >= 14) v += sig0(w[i - 15]);
+        w.push(v & M);
+      }
+      w.push((sig1(w[28]) + w[23] + sig0(w[15]) + w[14] + K14 - 0x9bdc06a7n) & M); // 注意：减的是原表 K[14]，不是替换后的 K14
+      expand(w, 31);
+      const wk = rounds(ST0, w, 14);
+      return IV.map((x, i) => (x + wk[i]) & M);
+    };
+    const length = 57 + data.length;
+    const pad = Buffer.concat([data.subarray(7), Buffer.from([0x80]), Buffer.alloc(((55 - length) % 64 + 64) % 64), Buffer.alloc(8)]);
+    pad.writeBigUInt64BE(BigInt(length) * 8n, pad.length - 8);
+    let st = init(data.subarray(0, 7));
+    for (let off = 0; off < pad.length; off += 64) {
+      const w = []; for (let i = 0; i < 16; i++) w.push(BigInt(pad.readUInt32BE(off + i * 4)));
+      expand(w, 16);
+      const wk = rounds(st, w, 0);
+      st = st.map((x, i) => (x + wk[i]) & M);
+    }
+    const out = Buffer.alloc(32);
+    st.forEach((x, i) => out.writeUInt32BE(Number(x), i * 4));
+    return out;
+  }
+  function cs64(data, dg) {
+    let ka = BigInt(dg.readUInt32LE(0)) | 1n, kb = BigInt(dg.readUInt32LE(4)) | 1n;
+    const f0 = (ka * CSF) & M, f1 = (kb * CSF) & M;
+    const terms = CS.map(([co], i) => (co * (i % 2 ? f1 : f0)) & M);
+    const offs = CS.map(([, o]) => o);
+    const words = [];
+    const bb = Buffer.concat([Buffer.from([0]), data]);
+    const padded = Buffer.concat([bb, Buffer.alloc((4 - (bb.length % 4)) % 4)]);
+    for (let i = 0; i < padded.length; i += 4) words.push(BigInt(padded.readUInt32LE(i)));
+    if (words.length % 2) words.push(0n);
+    words.forEach((word, i) => {
+      terms.push((word * (i % 2 ? kb : ka)) & M);
+      let off = (rol16(word) * (i % 2 ? 0xc31713dbn : 0xef0569fbn)) & M;
+      if (i === 0) { terms[terms.length - 1] = (terms[terms.length - 1] + CSA0 * f0) & M; off = (off + CSA1) & M; }
+      offs.push(off);
+    });
+    let sa = 0n, sl = 0n, st = 0n, acc = 0n;
+    for (let i = 0; i < terms.length; i += 2) {
+      const x = terms[i], y = terms[i + 1];
+      let t = rol16((offs[i] + x) & M), q = (t * 0x76f50f34n) & M;
+      sa = (sa + ((rol16(q) * 0xc3efea97n + q) & M)) & M;
+      t = rol16((offs[i + 1] + y) & M); q = (t * 0x1881ce3cn) & M;
+      sl = (rol16(q) * 0x35bd1ec9n + q) & M;
+      sa = (sa + sl) & M;
+      st = (st * ka + x) & M;
+      st = (rol16(st) * 0xcf98b111n) & M;
+      st = (rol16(st) * 0x87085b9fn) & M;
+      st = (rol16(st) * 0x12ceb96dn) & M;
+      st = (rol16(st) * 0x257e1d83n) & M;
+      acc = (acc + st) & M;
+      t = (st * kb + y) & M;
+      t = (rol16(t) * 0xa27416f5n) & M;
+      t = (rol16(t) * 0xd38396ffn) & M;
+      st = (rol16((rol16(t) * 0x7c932b89n) & M) * 0xbfa49f69n) & M;
+      acc = (acc + st) & M;
+    }
+    const out = Buffer.alloc(8);
+    out.writeUInt32LE(Number(sl ^ st), 0); out.writeUInt32LE(Number(sa ^ acc), 4);
+    return out;
+  }
+  // ticks 仍按 float64 复现 python 舍入（旧坑：BigInt 精确整数会被端点判 403）
   const t = (nowMs === undefined ? Date.now() : nowMs) / 1000 + 11644473600;
-  const rounded = t - (t % 300);
-  const ticks = (rounded * 1e7).toFixed(0);
-  return TTS_CRYPTO.createHash('sha256').update(ticks + TTS_TRUSTED_TOKEN, 'ascii').digest('hex').toUpperCase();
+  const str = ((t - (t % 300)) * 1e7).toFixed(0) + TTS_TRUSTED_TOKEN;
+  const data = Buffer.from(str, 'ascii');
+  const dg = digest(data);
+  return cs64(data, dg).toString('hex').toUpperCase() + '-' + dg.toString('hex').toUpperCase();
+}
+
+function ttsSecMsGec(nowMs) {
+  return ttsSecMsGecV2(nowMs);
 }
 
 function ttsSsmlEscape(text) {
@@ -2050,7 +1809,9 @@ function ttsPitchFromConfig() {
 }
 
 function ttsBuildSsml(text, voice, rate, pitch) {
-  return "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>" +
+  // xml:lang 跟随音色的主 locale（zh-HK-Xxx → zh-HK）；方言音色 zh-CN-liaoning 取前两段仍是 zh-CN
+  const lang = (String(voice || '').match(/^([a-z]{2}-[A-Za-z]{2})/) || ['zh-CN'])[1];
+  return "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='" + lang + "'>" +
     "<voice name='" + voice + "'><prosody pitch='" + (pitch || '+0Hz') + "' rate='" + rate + "' volume='+0%'>" +
     ttsSsmlEscape(text) + '</prosody></voice></speak>';
 }
@@ -2178,7 +1939,10 @@ function ttsSynthesize(opts) {
       if (!chunks.length) return reject(new Error('TTS 没有返回音频'));
       resolve(Buffer.concat(chunks));
     }
-    const ws = ttsConnect(url, TTS_HEADERS, {
+    const ws = ttsConnect(url, Object.assign({}, TTS_HEADERS, {
+      // [local patch T4] v2 鉴权要求带 muid Cookie（每次随机 32 hex 大写）
+      Cookie: 'muid=' + TTS_CRYPTO.randomBytes(16).toString('hex').toUpperCase() + ';',
+    }), {
       onSocket: (s) => { sockRef = s; TTS_LIVE.add(s); },
       open: () => {
         ws.send('X-Timestamp:' + new Date().toISOString() + '\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n' +
@@ -2226,8 +1990,8 @@ ipcMain.handle('pet:tts-speak', async (event, payload) => {
 });
 /* [local patch X] 清理缓存 —— 她自己的文件 + 浏览器缓存（**只手动**：主人明确不要定时、不要启动时清）
  * 边界写死在这里，别放宽：
- *   ① 删文件只认「写死的三条」：screen-watch 下的 shot.jpg / voice-log.json / voice-selftest.wav，
- *      加 %TEMP% 里有前缀白名单的临时产物（dsh-pet-voice-*.wav / dsh-pet-smoke*.png）。
+ *   ① 删文件只认「写死的一条」：screen-watch 下的 shot.jpg，
+ *      加 %TEMP% 里有前缀白名单的临时产物（dsh-pet-smoke*.png）。
  *      不递归删目录、不按通配删任意文件；memory.json（聊天记忆）、main-config.json（人设）、
  *      state.json（屏幕监测设置）、capture.ps1、Local Storage（她的设置与权限审计）一律不碰。
  *   ② 浏览器缓存**不 rm 目录**（Chromium 正开着，删目录会打架），只走 Electron 官方 API：
@@ -2240,12 +2004,9 @@ ipcMain.handle('pet:tts-speak', async (event, payload) => {
 const CACHE_PET_DIR = path.join(process.env.DSH_HOME || path.join(require('node:os').homedir(), '.dsh'), 'dsh-pet');
 const CACHE_FIXED = [
   { rel: ['screen-watch', 'shot.jpg'], what: '截屏' },
-  { rel: ['screen-watch', 'voice-log.json'], what: '语音日志' },
-  { rel: ['screen-watch', 'voice-selftest.wav'], what: '自检录音' },
 ];
-// %TEMP% 里只认这两类前缀 + 后缀（都是我们自己的产物；%TEMP% 里别的文件一个都不动）
+// %TEMP% 里只认这一类前缀 + 后缀（都是我们自己的产物；%TEMP% 里别的文件一个都不动）
 const CACHE_TMP_OK = [
-  { prefix: 'dsh-pet-voice-', suffix: '.wav', what: '临时录音' },
   { prefix: 'dsh-pet-smoke', suffix: '.png', what: '冒烟截图' },
 ];
 const CACHE_BROWSER_DIRS = ['Cache', 'Code Cache', 'GPUCache', 'DawnGraphiteCache', 'DawnWebGPUCache'];
@@ -2329,6 +2090,111 @@ ipcMain.handle('pet:cache-clean', async (event, payload) => {
     return { ok: false, error: String((e && e.message) || e) };
   }
 });
+/* [local patch W2] 今天天气 —— Open-Meteo（免费、不用申请 Key）：
+ *   定位两档：设置了城市 → Open-Meteo Geocoding 解析经纬度（结果缓存一周）；
+ *             没设城市 → IP 定位（ip-api.com 免费档，仅 http，结果缓存一天；挂代理时会漂，设置里填城市最稳）。
+ *   天气本体缓存 30 分钟；5 分钟内的缓存直接给（手动连点不刷屏、省免费源配额），
+ *   超过 5 分钟就真发一次请求；请求失败回落 6 小时内的旧缓存（如实标 stale），再没有才报错 —— 断网不编数据。
+ * 纯数据通道：这里只给数字和文字，台词由渲染端按人设去说。内存缓存即可，不落盘（天气不值得占用户磁盘）。 */
+const WEATHER_FRESH_MS = 5 * 60 * 1000;             // 缓存多新以内直接用（不再发请求）
+const WEATHER_STALE_MS = 6 * 60 * 60 * 1000;        // 请求失败时，多旧的缓存还能垫给你看
+const WEATHER_IP_TTL_MS = 24 * 60 * 60 * 1000;      // IP 定位结果缓存一天
+const WEATHER_GEO_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 城市名→经纬度缓存一周
+const weatherMem = { wx: null, ip: null, geo: new Map() };
+
+/** WMO 天气码 → 中文（只列常见的，未知码回落「天气未知」）。 */
+function weatherCondText(code) {
+  const t = {
+    0: '晴', 1: '大致晴', 2: '少云', 3: '阴',
+    45: '雾', 48: '雾凇',
+    51: '毛毛雨', 53: '毛毛雨', 55: '密毛毛雨', 56: '冻毛毛雨', 57: '冻毛毛雨',
+    61: '小雨', 63: '中雨', 65: '大雨', 66: '冻雨', 67: '冻雨',
+    71: '小雪', 73: '中雪', 75: '大雪', 77: '米雪',
+    80: '阵雨', 81: '阵雨', 82: '强阵雨', 85: '阵雪', 86: '阵雪',
+    95: '雷雨', 96: '雷雨伴冰雹', 99: '雷雨伴冰雹',
+  };
+  return t[code] || '天气未知';
+}
+
+/** 风向角度 → 八方位；风速 km/h → 蒲福风级（段表，不搞公式）。两个字段都缺就给空串。 */
+function weatherWindText(dirDeg, kmh) {
+  const dirs = ['北', '东北', '东', '东南', '南', '西南', '西', '西北'];
+  const d = Number.isFinite(dirDeg) ? dirs[Math.round((((dirDeg % 360) + 360) % 360) / 45) % 8] : '';
+  const v = Number(kmh);
+  const lv = !Number.isFinite(v) ? null : v < 1 ? 0 : v < 6 ? 1 : v < 12 ? 2 : v < 20 ? 3 : v < 29 ? 4 : v < 39 ? 5 : v < 50 ? 6 : v < 62 ? 7 : 8;
+  if (!d && lv === null) return '';
+  return (d ? d + '风' : '风') + (lv !== null ? ' ' + lv + ' 级' : '');
+}
+
+/** 拉一个 JSON：超时 / 非 2xx 一律抛，调用方统一兜（回落旧缓存或如实报错）。 */
+async function weatherFetchJson(url, timeoutMs) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
+}
+
+/** 城市名 → 经纬度（Open-Meteo Geocoding，同样免费无 Key）。找不到如实抛，绝不猜坐标。 */
+async function weatherGeocode(city) {
+  const key = city.trim().toLowerCase();
+  const hit = weatherMem.geo.get(key);
+  if (hit && Date.now() - hit.at < WEATHER_GEO_TTL_MS) return hit.v;
+  const j = await weatherFetchJson('https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(city.trim()) + '&count=1&language=zh&format=json', 10000);
+  const r = j && Array.isArray(j.results) && j.results[0];
+  if (!r || typeof r.latitude !== 'number' || typeof r.longitude !== 'number') throw new Error('没找到城市「' + city.trim() + '」');
+  const v = { lat: r.latitude, lon: r.longitude, name: [r.name, r.admin1].filter(Boolean).join('·') || city.trim() };
+  weatherMem.geo.set(key, { at: Date.now(), v });
+  return v;
+}
+
+/** IP 定位（ip-api.com 免费档：不用 Key，但免费线路只有 http）。失败如实抛。 */
+async function weatherIpLocate() {
+  if (weatherMem.ip && Date.now() - weatherMem.ip.at < WEATHER_IP_TTL_MS) return weatherMem.ip.v;
+  const j = await weatherFetchJson('http://ip-api.com/json/?lang=zh-CN&fields=status,message,city,lat,lon', 8000);
+  if (!j || j.status !== 'success' || typeof j.lat !== 'number' || typeof j.lon !== 'number') {
+    throw new Error('IP 定位没成功' + (j && j.message ? '（' + j.message + '）' : ''));
+  }
+  const v = { lat: j.lat, lon: j.lon, name: String(j.city || '本地') };
+  weatherMem.ip = { at: Date.now(), v };
+  return v;
+}
+
+ipcMain.handle('pet:weather-get', async (event, payload) => {
+  const city = payload && typeof payload.city === 'string' ? payload.city.trim() : '';
+  const now = Date.now();
+  // 缓存够新（5 分钟内）且城市没变：直接给 —— 手动连点不会连环打请求
+  if (weatherMem.wx && weatherMem.wx.city === city && now - weatherMem.wx.at < WEATHER_FRESH_MS) {
+    return Object.assign({ ok: true }, weatherMem.wx.data, { cached: true, ageSec: Math.round((now - weatherMem.wx.at) / 1000) });
+  }
+  try {
+    const loc = city ? await weatherGeocode(city) : await weatherIpLocate();
+    const q = 'latitude=' + loc.lat + '&longitude=' + loc.lon +
+      '&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_2m,wind_direction_10m' +
+      '&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1';
+    const j = await weatherFetchJson('https://api.open-meteo.com/v1/forecast?' + q, 12000);
+    const cur = j && j.current;
+    if (!cur || typeof cur.temperature_2m !== 'number') throw new Error('天气服务返回缺字段');
+    const d = {
+      city: loc.name,
+      temp: cur.temperature_2m,
+      feels: cur.apparent_temperature,
+      hum: cur.relative_humidity_2m,
+      code: cur.weather_code,
+      cond: weatherCondText(cur.weather_code),
+      windText: weatherWindText(cur.wind_direction_10m, cur.wind_speed_2m),
+      tmin: j.daily && Array.isArray(j.daily.temperature_2m_min) ? j.daily.temperature_2m_min[0] : null,
+      tmax: j.daily && Array.isArray(j.daily.temperature_2m_max) ? j.daily.temperature_2m_max[0] : null,
+    };
+    weatherMem.wx = { at: now, city, data: d };
+    return Object.assign({ ok: true }, d, { cached: false, ageSec: 0 });
+  } catch (e) {
+    // 请求失败：6 小时内的旧缓存还能垫（如实标 stale），再旧就如实说连不上 —— 绝不编数据
+    if (weatherMem.wx && weatherMem.wx.city === city && now - weatherMem.wx.at < WEATHER_STALE_MS) {
+      return Object.assign({ ok: true }, weatherMem.wx.data, { cached: true, stale: true, ageSec: Math.round((now - weatherMem.wx.at) / 1000) });
+    }
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
 ipcMain.on('pet:set-bounds', (event, bounds) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return;
@@ -2416,15 +2282,42 @@ ipcMain.on('pet:set-bounds', (event, bounds) => {
     inputBusy.set(win.id, !!busy);
   });
 
-  // 右键菜单「打开网站」：交给**系统默认浏览器**打开（等效于网页里 Ctrl+点击链接新标签页），
-  // 不建专属窗口——宠物窗口机制是透明小窗，不该承载常规网页浏览。URL 由渲染端从
-  // configUrl 推导 = DSH webServer 端口，端口变化自动跟随
-  ipcMain.on('pet:open-site', (event, payload) => {
-    const url = payload && typeof payload === 'object' ? String(payload.url || '') : '';
-    if (!/^https?:[/][/]/.test(url)) return;
-    shell.openExternal(url).catch((error) => {
-      console.error('[dsh-pet-desktop-helper] openExternal failed:', error);
-    });
+  // 右键菜单「设置面板」：拉起控制台窗口（launcher）。找 launcher、spawn 都需要主进程权限，
+  // 渲染端只发 IPC。launcher 有单实例锁（requestSingleInstanceLock）：已经在跑时，这里拉起的
+  // 第二实例会自己退出并经 second-instance 事件把已有窗口 show+focus——所以可以无脑 spawn，
+  // 不会开出第二个控制台。路径按发布版布局推导（本文件在 <根>/app/runtime/electron-helper/，
+  // 控制台在 <根>/launcher/main.js；开发树 stage\ 与仓库根同样成立）。
+  ipcMain.handle('pet:open-console', () => {
+    const launcherMain = path.join(__dirname, '..', '..', '..', 'launcher', 'main.js');
+    console.log(
+      '[dsh-pet-desktop-helper] pet:open-console 收到，launcherMain=' +
+        launcherMain +
+        ' exists=' +
+        existsSync(launcherMain),
+    );
+    if (!existsSync(launcherMain)) {
+      console.error('[dsh-pet-desktop-helper] launcher not found: ' + launcherMain);
+      return { ok: false, error: 'launcher-not-found' };
+    }
+    try {
+      const child = spawn(process.execPath, [launcherMain], {
+        cwd: path.dirname(launcherMain),
+        detached: true,
+        stdio: 'ignore',
+        // 不设 windowsHide：Node 会因此给子进程 STARTUPINFO 带 SW_HIDE，Windows 把它应用到
+        // 新进程的第一个顶层窗口上——表现为「控制台第一窗不显示，第二次点才被
+        // second-instance 回调里的 win.show() 救回来」。electron.exe 是 GUI 子系统、本无
+        // 控制台可藏，这个参数纯属多余（Electron 已知坑）。
+      });
+      child.on('error', (error) => {
+        console.error('[dsh-pet-desktop-helper] launcher spawn failed:', String(error));
+      });
+      child.unref();
+      return { ok: true };
+    } catch (e) {
+      console.error('[dsh-pet-desktop-helper] launcher spawn 异常:', String((e && e.message) || e));
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   });
 
   // 显示器热更新：分辨率/缩放变化、插拔屏、旋转都会让桌面几何失效。原先几何只在

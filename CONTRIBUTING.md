@@ -14,7 +14,7 @@ Thanks for wanting to help. This is a hobby project maintained by one person, so
 
 Requirements: Windows 10/11 x64, Node.js 24, Python 3, [NSIS 3](https://nsis.sourceforge.io/) (only for the installer).
 
-About 689 MB of runtime (Electron 43.3.0, node v24.21.0, sherpa-onnx + SenseVoice) is **not** in git. The easiest source is an installed copy of the app:
+About 347 MB of runtime (Electron 43.3.0) is **not** in git. The easiest source is an installed copy of the app:
 
 ```powershell
 npm run toolchain                                                      # what is missing, and where to get it

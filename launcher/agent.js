@@ -3,7 +3,7 @@
 //
 // 为什么放在控制台这一侧：模型调用走的是桌宠自己的 /quip 通道（宿主 lib/index.js 的 [local patch 4]），
 // 所以用的就是她此刻的模型与大脑档位（本地 Ollama / 联网 / 自动择优），不受控制台左右；
-// 而真正动手（开软件、开网页、起停录屏、改保存位置）由控制台进程执行 —— 它有 Electron 的 shell，
+// 而真正动手（开软件、开网页）由控制台进程执行 —— 它有 Electron 的 shell，
 // 也不必再往副本里塞第 3 条补丁。
 //
 // 协议：模型每轮只回一个 JSON：
@@ -41,53 +41,6 @@ const SITES = [
 ];
 
 const TOOLS = {
-	list_recorders: {
-		desc: "看看这台电脑上有哪些能录屏的软件（只读，不改任何东西）",
-		args: "{}",
-		perm: null,
-		run: async () => rec.detectRecorders(),
-	},
-	use_recorder: {
-		desc: "换一个录屏软件（名字或路径，先用 list_recorders 看）",
-		args: '{"name":"OBS Studio"}',
-		perm: "app",
-		run: async (a) => {
-			const q = String((a && (a.name || a.path)) || "").trim();
-			if (!q) return { ok: false, reason: "empty", message: "没给软件名" };
-			const det = rec.detectRecorders();
-			const ql = q.toLowerCase();
-			const hit =
-				det.list.find((x) => x.path.toLowerCase() === ql) ||
-				det.list.find((x) => x.name.toLowerCase() === ql) ||
-				det.list.find((x) => x.name.toLowerCase().includes(ql) || ql.includes(x.name.toLowerCase()));
-			const soft = hit || { name: q, path: /[\\/]/.test(q) ? q : "", kind: /obs/i.test(q) ? "obs" : "other" };
-			const r = rec.writeRecord({ software: soft });
-			return { ok: true, software: r.record.software, candidates: det.list.map((x) => x.name) };
-		},
-	},
-	open_recorder: {
-		desc: "把当前选定的录屏软件打开（需要「软件」权限）",
-		args: "{}",
-		perm: "app",
-		run: async () => rec.recOpen(),
-	},
-	record: {
-		desc: "录屏动作：开始 / 停止 / 看状态",
-		args: '{"action":"start"}',
-		perm: "app",
-		run: async (a) => {
-			const act = String((a && a.action) || "").toLowerCase();
-			if (/^(start|开始|open|开)/.test(act)) return rec.recStart();
-			if (/^(stop|停止|停|关)/.test(act)) return rec.recStop();
-			return rec.recStatus();
-		},
-	},
-	record_dir: {
-		desc: "把录像保存位置改到某个文件夹（OBS 能真的改；别的软件只能记下来）",
-		args: '{"dir":"E:\\\\录像"}',
-		perm: "app",
-		run: async (a) => rec.recSetDir((a && (a.dir || a.path)) || ""),
-	},
 	list_apps: {
 		desc: "列出本机开始菜单里的软件（可以用 keyword 过滤，只读）",
 		args: '{"keyword":"chrome"}',
@@ -140,7 +93,7 @@ const TOOLS = {
 const PERM_CN = { app: "软件", file: "文件", url: "网页" };
 
 // 一次就能办完的动作：办成之后直接收尾，别再让小模型接着瞎调工具绕圈。
-const ONE_SHOT = new Set(["open_url", "open_app", "open_file", "use_recorder", "record_dir", "record", "search"]);
+const ONE_SHOT = new Set(["open_url", "open_app", "open_file", "search"]);
 const WRAP_SYSTEM = "你是桌面上的「蓝毛小女仆」，说话简短、可爱、口语化，用中文。";
 
 function stripThink(text) {
@@ -225,8 +178,7 @@ function buildSystem(ctx) {
 	lines.push("1. 一次只调一个工具，看到结果再决定下一步。");
 	lines.push("2. 权限关着的时候工具会失败，这时候别硬试，用 done 告诉主人去哪儿打开开关。");
 	lines.push("3. 主人让你打开某个网站，用 open_url 直接开；不确定网址就用 search 搜一下（他说「打开B站」时两种都行）。");
-	lines.push("4. 主人让你录屏，先看 record(action=\"status\")，再决定 record 开始还是停止。");
-	lines.push("5. 干完活一定用 done 收尾，把「做了什么、结果怎么样」一句话说清楚。");
+	lines.push("4. 干完活一定用 done 收尾，把「做了什么、结果怎么样」一句话说清楚。");
 	lines.push("");
 	lines.push("参考网址：");
 	for (const [k, v] of SITES) lines.push(`- ${k} → ${v}`);
@@ -255,7 +207,7 @@ function stateLine(ctx) {
 	const p = ctx.perm || {};
 	return (
 		`当前状态：权限 软件【${p.app ? "开" : "关"}】文件【${p.file ? "开" : "关"}】网页【${p.url ? "开" : "关"}】` +
-		`；录屏软件 ${ctx.recorder.name}；存到 ${ctx.recDir || "（没设）"}；浏览器 ${ctx.browser || "系统默认"}。`
+		`；浏览器 ${ctx.browser || "系统默认"}。`
 	);
 }
 
@@ -284,9 +236,7 @@ function normalizeArgs(obj) {
 const TERSE_SYSTEM =
 	"你是一个只输出 JSON 的桌面助手。不要思考、不要解释、不要写多余文字，直接输出一个 JSON 对象。\n" +
 	'可用工具：{"tool":"open_url","args":{"url":"..."}}、{"tool":"search","args":{"q":"..."}}、' +
-	'{"tool":"open_app","args":{"name":"..."}}、{"tool":"list_recorders","args":{}}、' +
-	'{"tool":"use_recorder","args":{"name":"..."}}、{"tool":"record","args":{"action":"start|stop|status"}}、' +
-	'{"tool":"record_dir","args":{"dir":"..."}}、{"tool":"open_recorder","args":{}}、' +
+	'{"tool":"open_app","args":{"name":"..."}}、' +
 	'{"tool":"speak","args":{"text":"..."}}、{"tool":"done","args":{"reply":"..."}}。\n' +
 	"/no_think";
 
@@ -342,9 +292,6 @@ function summarizeSteps(steps, why) {
 	if (last.tool === "search") return `已经在浏览器里搜「${a.q || ""}」了。`;
 	if (last.tool === "open_app") return `已经打开「${a.name || r.opened || "软件"}」了。`;
 	if (last.tool === "open_file") return `已经打开 ${a.path || r.opened || "文件"} 了。`;
-	if (last.tool === "record") return a.action === "stop" ? `录好了，文件在 ${r.path || "录像文件夹"}。` : a.action === "start" ? "开始录了。" : "录屏是空着的。";
-	if (last.tool === "record_dir") return `保存位置改成 ${a.dir || ""} 了。`;
-	if (last.tool === "use_recorder") return `录屏软件换成「${a.name || ""}」了。`;
 	if (last.tool === "speak") return "话替你说了。";
 	return `做完了（${last.tool}）。后面的收尾话没说出来：${why || ""}`;
 }
@@ -361,9 +308,7 @@ async function runAgent(request, opts = {}) {
 	const permRes = await rec.readPerm();
 	const ctx = {
 		perm: permRes.perm || { app: false, file: false, url: false },
-		recorder: rec.readRecord().software,
-		recDir: rec.readRecord().outDir,
-		browser: rec.readRecord().browser,
+		browser: rec.readPrefs().browser,
 	};
 	if (!permRes.ok) ctx.permNote = `（权限状态暂时读不到：${permRes.reason}，可能是桌宠刚重启，稍等一下）`;
 	// 本机 ollama 的 qwen3 是「先想后写」的模型：提示词越长它想得越久。本机就用紧凑那套；
@@ -457,9 +402,9 @@ async function runAgent(request, opts = {}) {
 		transcript.push(`你调用了 ${name}(${JSON.stringify(args)})`);
 		transcript.push(`工具结果：${JSON.stringify(result).slice(0, 700)}`);
 		if (transcript.length > 14) transcript.splice(0, transcript.length - 14);
-		// 一次就能办完的动作（开网页 / 开软件 / 换录屏目录…）办成了就收尾 ——
+		// 一次就能办完的动作（开网页 / 开软件 / 搜索…）办成了就收尾 ——
 		// 小模型很容易接着瞎调工具绕圈，不如直接问她结果怎么说。
-		if (result && result.ok !== false && ONE_SHOT.has(name) && !(name === "record" && args.action === "status")) {
+		if (result && result.ok !== false && ONE_SHOT.has(name)) {
 			const reply = await wrapUp(transcript, petTimeout);
 			if (reply) rec.say(reply).catch(() => {});
 			return { ok: true, reply: reply || summarizeSteps(steps) || "办好了", steps, model: "" };

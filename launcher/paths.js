@@ -50,27 +50,10 @@ function resolvePaths(launcherDir) {
     standaloneDir: join(root, "standalone"),
     runnerMain: join(root, "standalone", "main.mjs"),
     launcherDir,
-    // 语音包（随包分发）
-    speechDir: join(root, "speech"),
-    sherpaAddon: join(root, "speech", "sherpa", "sherpa-onnx.node"),
-    sileroModel: join(root, "speech", "sensevoice", "models", "silero", "silero_vad.onnx"),
-    nodeExe: join(root, "node", "bin", "node.exe"),
   };
 }
 
 /**
- * 语音输入那三样外挂（stt-worker.mjs 只认这些环境变量）+ 真 node.exe。
- * 与 ..\standalone\paths.mjs 的 speechEnv 保持同一套规则。
- */
-function speechEnv(paths) {
-  const out = {};
-  if (existsSync(paths.sherpaAddon)) out.DSH_PET_SHERPA_ADDON = paths.sherpaAddon;
-  if (existsSync(paths.sileroModel)) out.DSH_PET_SILERO_MODEL = paths.sileroModel;
-  if (existsSync(paths.speechDir)) out.DSH_SPEECH_DIR = paths.speechDir;
-  if (existsSync(paths.nodeExe)) out.DSH_PET_NODE = paths.nodeExe;
-  return out;
-}
-
 /** 首次运行铺默认数据：只补缺的，绝不覆盖已有的 */
 function seedUserData(paths) {
   let made = 0;
@@ -102,4 +85,4 @@ function readDeviceProfile(paths) {
   }
 }
 
-module.exports = { APP_NAME, DISPLAY_NAME, appDataDir, dataRootInfo, resolvePaths, seedUserData, readDeviceProfile, speechEnv };
+module.exports = { APP_NAME, DISPLAY_NAME, appDataDir, dataRootInfo, resolvePaths, seedUserData, readDeviceProfile };

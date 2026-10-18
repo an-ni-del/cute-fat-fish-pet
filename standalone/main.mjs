@@ -125,7 +125,7 @@ const USAGE = `「${DISPLAY_NAME}」独立模式（不需要 DSH）
   3) 程序目录里的 portable.txt  → 数据放「程序目录\\userdata」（便携模式）
   4) 默认 %APPDATA%\BlueHairMaid\
 
-独立模式下可用：动画、物理拖拽、右键菜单、多开、自定义素材与宠物种类、屏幕监测、语音输入、
+独立模式下可用：动画、物理拖拽、右键菜单、多开、自定义素材与宠物种类、屏幕监测、
                 TTS、唱歌、AI 导演、全局大脑与碎碎念（模型走本机 Ollama 或联网模型）
 独立模式下不可用（会明确报错，不会假装成功）：余额查询（要 DSH 的凭证库）、DSH 会话工作状态、系统通知
 `;
@@ -618,7 +618,7 @@ async function main() {
 	console.log("");
 	console.log("  独立模式下不可用（需要 DSH 的凭证 / 会话，会明确报错而不会假装成功）：");
 	console.log("    · 余额查询      · DSH 会话工作状态      · 系统通知");
-	console.log("  其余功能都可用：动画、拖拽、右键菜单、多开、屏幕监测、语音输入、TTS、唱歌、AI 导演、碎碎念、对话；");
+	console.log("  其余功能都可用：动画、拖拽、右键菜单、多开、屏幕监测、TTS、唱歌、AI 导演、碎碎念、对话；");
 	console.log("  其中「会出话」的那几个走本机 Ollama（离线、不花额度）。");
 	console.log("");
 	console.log("  退出：关掉这个窗口，或 Ctrl+C，或双击 stop-pet.vbs（命令行里是 node standalone\\stop-pet.mjs）");

@@ -17,7 +17,6 @@ Cute Fat Fish Pet is a Windows desktop application that:
 - renders a transparent, always-on-top window on your desktop;
 - can take screenshots of your desktop (when screen watching is switched on) and send them to **the model you configured** — a local Ollama model by default, or an online endpoint if you choose one;
 - can open apps, files, folders and web pages on your behalf (three separate permission switches, all off until you turn them on);
-- can start and stop a screen recording by driving OBS over its WebSocket interface;
 - listens on **loopback only** (`127.0.0.1`), never on a LAN interface;
 - has **no telemetry** and makes no network request except the ones your own configuration enables (online model endpoints, Edge TTS, update-free by design: there is no updater).
 

@@ -269,20 +269,10 @@ export const HELPER_STOP_GRACE_MS = 1000;
  * 设 `''` → 直接 abort（exit 134，`node::CreateEnvironment` 断言失败）；设 `'0'`/`'false'`/`'1'` →
  * 都进纯 Node 模式。运行期再 `delete process.env` 已经晚了（模块加载器在进程启动瞬间就定了）。
  *
- * 另外透传 `DSH_PET_DSH_RESOURCES`（= 宿主自己的 `process.resourcesPath`）：语音 worker 要用 DSH
- * 随包带的 sherpa 原生 addon，而这个位置**只有宿主进程知道** —— helper 是被我们 spawn 的另一个
- * Electron，它的 `resourcesPath` 指向自己的运行时（$DSH_HOME/electron），跟 DSH 安装位置无关。
- * 与其在 worker 里写死某台机器的安装路径（旧版就是 `D:\...\app.asar.unpacked\...`，换台机器就废），
- * 不如把「DSH 装在哪」这个事实交给唯一知道的进程。非 Electron 宿主（纯 node CLI）没有这个属性，
- * 那就干脆不设这个键，worker 走它自己的其它候选。
  */
 export function helperSpawnEnv(hostPid: number, extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, DSH_PET_HOST_PID: String(hostPid), ...extra };
   delete env.ELECTRON_RUN_AS_NODE;
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  if (typeof resourcesPath === 'string' && resourcesPath && !env.DSH_PET_DSH_RESOURCES) {
-    env.DSH_PET_DSH_RESOURCES = resourcesPath;
-  }
   return env;
 }
 

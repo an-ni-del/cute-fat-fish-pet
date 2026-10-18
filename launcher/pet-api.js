@@ -9,7 +9,7 @@
 // Authorization / X-Pet-Token（readToken / authHeaders），401 时给人话提示——删掉它控制台就连不上了。
 // 桌宠「够不着的那半边」的接口层。
 //
-// 一、控制桥（权限 / 语音模式 / 活跃度 / 自主说话 / AI 导演 / 本地文本模型偏好）
+// 一、控制桥（权限 / 活跃度 / 自主说话 / AI 导演 / 本地文本模型偏好）
 //     这些状态躺在桌宠渲染进程的 localStorage 里，外部进程本来够不着。
 //     副本里的 helper 主进程开了一个只监听 127.0.0.1 的小服务（app\runtime\electron-helper\main.js 的
 //     startControlBridge），端口写在 <repo>\dsh-pet\helper-control.json。这里负责找它、读它、写它。
@@ -42,7 +42,7 @@ const HOST = "127.0.0.1";
 const CONTROL_PORTS = Array.from({ length: 12 }, (_, i) => 3099 + i);
 
 // 跟 helper 的 CONTROL_KEY_RE 对齐：只认这些族
-const KINDS = ["perm", "voice", "mood", "talk", "textmodel", "tts", "speech", "cache"];
+const KINDS = ["perm", "mood", "talk", "textmodel", "tts", "speech", "cache", "weather"];
 const KIND_SET = new Set(KINDS);
 
 const keyFor = (kind, petId) => `dsh-pet-${kind}-${petId || "main"}`;

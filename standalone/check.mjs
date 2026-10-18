@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 「蓝毛小女仆」独立版自检 —— 确认这只桌宠真的不依赖宿主环境。
 //
-//   ..\node\bin\node.exe check.mjs
+//   node check.mjs
 //
 // 它只做只读检查：不启动、不停止、不改任何文件。桌宠没在跑时也会检查"零件齐不齐"。
 // 退出码 0 = 全部通过；1 = 有不通过项（每项都会说明为什么）。
@@ -13,7 +13,6 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..");
 
-const NODE_EXE = join(REPO, "node", "bin", "node.exe");
 const ELECTRON_EXE = join(REPO, "electron", "electron.exe");
 const APP_DIR = join(REPO, "app");
 const DATA_DIR = join(REPO, "dsh-pet");
@@ -51,7 +50,7 @@ console.log("");
 
 // ---- 1. 零件齐不齐（和桌宠跑不跑无关）---------------------------------------
 console.log("1) 自带零件");
-for (const [label, p, dir] of [["Node", NODE_EXE, false], ["Electron", ELECTRON_EXE, false], ["桌宠本体 app\\", APP_DIR, true], ["数据根 dsh-pet\\", DATA_DIR, true]]) {
+for (const [label, p, dir] of [["Electron", ELECTRON_EXE, false], ["桌宠本体 app\\", APP_DIR, true], ["数据根 dsh-pet\\", DATA_DIR, true]]) {
 	if (!existsSync(p)) { bad(label, "找不到：" + p); continue; }
 	const st = statSync(p);
 	if (dir && !st.isDirectory()) { bad(label, "不是目录：" + p); continue; }

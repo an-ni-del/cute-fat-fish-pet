@@ -1,4 +1,4 @@
-/* dsh-pet local patches: drag-hold@1 menu-state@8 speech-stats@4 gaze-cursor@1 click-chat@1 mood-model@2 sing-along@8 auto-talk@2 pc-actions@4 move-2d@1 voice-mode@8 tts-speak@3 brain-switch@4 cache-menu@3 director-budget@1 voice-persist@1 voice-targets@1 */
+/* dsh-pet local patches: drag-hold@1 menu-state@8 speech-stats@4 gaze-cursor@1 click-chat@1 mood-model@2 sing-along@8 auto-talk@2 pc-actions@4 move-2d@1 tts-speak@3 brain-switch@4 cache-menu@3 director-budget@1 voice-targets@1 */
 /**
  * dsh-pet desktop helper —— 宠物本体（PetSprite 类）。
  *
@@ -228,33 +228,11 @@ class PetSprite {
     this.brainProbedAt = 0;
     this.refreshBrain();
     this.hookPcActions();
-    this.hookVoiceMode(); // [local patch V] 语音模式（默认关，不自动开麦）
-    // [local patch E6] 语音模式「记着上次的状态」：上次开着 → 这次开机自己开回来。
-    // 老代码 on 从不落盘，重启即静音 —— 主人报告的「语音叫她没反应」就是这个。
-    // 延迟 3s 等界面/权限就绪；开不起来就把盘上也改成关（不再每次启动都试一遍）。
-    if (this.voiceState && this.voiceState.on) {
-      window.setTimeout(() => {
-        if (!this.voiceState || !this.voiceState.on || this.voice) return;
-        this.voiceState.on = false; // startVoiceMode 有幂等短路（见 :3248），必须先复位再开
-        Promise.resolve(this.startVoiceMode())
-          .then((ok) => {
-            if (!ok && this.voiceState && !this.voiceState.on) this.saveVoice();
-          })
-          .catch(() => {
-            if (this.voiceState) {
-              this.voiceState.on = false;
-              this.saveVoice();
-            }
-          });
-      }, 3000);
-    }
     this.hookTtsSpeak(); // [local patch T] 语音输出：包一层 showWhisper（拿整段原文，切句归 TTS）
-    this.hookTtsEchoGate(); // [local patch T] 回声门控：我出声时麦克风整帧丢掉
   }
 
   dispose() {
     this.stopSinging(); // [local patch L] 停掉跟唱定时器，避免窗口销毁后回调
-    this.stopVoiceMode(); // [local patch V] 关掉麦克风与音频上下文
     this.ttsStop(); // [local patch T] 停掉朗读队列与音频
     this.ac.abort();
     if (this.bubbleTimer !== null) window.clearTimeout(this.bubbleTimer);
@@ -369,9 +347,11 @@ class PetSprite {
 
   // 双缓冲切换（与浏览器同一套：前台 opacity 切换 + 降级视频清 handler 并停播，防残留 ended 雪崩）
   switchTo(next, nextOnce) {
-    if (!next) return;
+    console.log('[dsh-pet][诊断] switchTo 请求 anim=' + next + ' once=' + nextOnce + '，当前 pending=' + (this.pending ? this.pending.anim + '/once=' + this.pending.once + '/gen=' + this.pending.gen : 'null') + ' front=' + this.front);
+    if (!next) { console.log('[dsh-pet][诊断] switchTo 拿到空动画名 → 直接返回（本次不会有动画/位移）'); return; }
     const pending = this.pending;
     if (pending && pending.anim === next && pending.once === nextOnce) {
+      console.log('[dsh-pet][诊断] switchTo 防重命中：目标与挂起中的动画相同 → 不加载、不切前台（本次切换被吞）');
       // 防重命中（单动画点击时目标=当前动画，不重播）：仍消费 Q 弹标记，压当前前台视频，
       // 保证「点击唯一动画」时挤压反馈不丢（与浏览器同构）。
       if (this.pendingSquash) {
@@ -384,8 +364,9 @@ class PetSprite {
     this.pending = { anim: next, once: nextOnce, gen };
     const target = this.front === 0 ? this.videoB : this.videoA;
     const el = target;
-    if (!el) return;
+    if (!el) { console.log('[dsh-pet][诊断] switchTo 目标视频元素为空 front=' + this.front + ' → 直接返回'); return; }
     el.src = this.assetBase + encodeURIComponent(next) + (S.ANIMATION_EXT || '.webm');
+    console.log('[dsh-pet][诊断] switchTo 开始加载 src=' + el.src);
     el.loop = !nextOnce;
     el.muted = true;
     el.autoplay = true;
@@ -409,7 +390,10 @@ class PetSprite {
       el.removeEventListener('loadeddata', onReady);
       window.clearTimeout(loadTimer);
       el.onerror = null;
-      if (this.pending && this.pending.gen !== gen) return;
+      if (this.pending && this.pending.gen !== gen) {
+        console.log('[dsh-pet][诊断] onReady 作废：本动画 gen=' + gen + ' 已被新一轮切换顶掉（pending.gen=' + this.pending.gen + ' anim=' + this.pending.anim + '）→ 不切前台、不启动移动');
+        return;
+      }
       const old = this.front === 0 ? this.videoA : this.videoB;
       el.classList.add('is-front');
       if (old && old !== el) {
@@ -426,6 +410,7 @@ class PetSprite {
         this.pendingSquash = false;
         this.startSquash(el);
       }
+      console.log('[dsh-pet][诊断] onReady 就位 anim=' + next + ' → 已切前台' + (this.pendingMove ? '，准备启动移动' : '，但无 pendingMove（不会位移）'));
       if (this.pendingMove) this.startMoveDrive(el);
     };
     el.addEventListener('loadeddata', onReady);
@@ -448,6 +433,13 @@ class PetSprite {
 
   // 动画链（与浏览器 pickNext 语义一致，纯逻辑在 shared）
   playIdle() {
+    // [诊断+修复] 指路/行走进行中：随机链让路。
+    // 否则本函数第一句 stopMove() 会把刚建立的 walkPlan / pendingMove 冲掉 → 指路静默作废
+    // （表现："点走到哪边只有气泡、宠物动画不切也不动"）。
+    if (this.walkPlan || this.pendingMove) {
+      console.log('[dsh-pet][诊断] playIdle 让路：指路/行走进行中 walkPlan=' + !!this.walkPlan + ' pendingMove=' + !!this.pendingMove);
+      return;
+    }
     this.stopMove();
     const { animations, animationWeights } = { animations: this.animations, animationWeights: this.weights };
     const roll = Math.random();
@@ -650,7 +642,11 @@ class PetSprite {
 
   startMoveDrive(el) {
     const pm = this.pendingMove;
-    if (!pm || this.moveRef !== null) return;
+    if (!pm || this.moveRef !== null) {
+      console.log('[dsh-pet][诊断] startMoveDrive 未启动：pendingMove=' + (pm ? '有' : '无') + ' moveRef=' + (this.moveRef === null ? 'null' : '非空') + ' → 本次不会有位移');
+      return;
+    }
+    console.log('[dsh-pet][诊断] startMoveDrive 启动：duration=' + el.duration + ' leadSec=' + pm.leadSec + ' tailSec=' + pm.tailSec + ' 起点比例=' + pm.startRatio + ' 目标比例=' + pm.targetRatio + ' dir=' + pm.dir);
     this.pendingMove = null;
     const { startRatio, startYRatio, targetRatio, dir, totalRatio, leadSec, tailSec } = pm;
     // [local patch S] 纵向一起插值（targetYRatio 缺省时等于起点的 Y，行为与改动前一致）
@@ -768,6 +764,7 @@ class PetSprite {
 
   // 走到某方位。返回 true=已出发 / 'here'=本来就在那儿 / 'busy'=正在被拖 / false=没有行走素材
   walkTo(place) {
+    console.log('[dsh-pet][诊断] walkTo 进入 place=' + place + '，行走素材数=' + (((this.animations && this.animations.moves && this.animations.moves.actions) || []).length) + '，正在被拖=' + !!(this.dragState && this.dragState.active));
     if (this.dragState && this.dragState.active) return 'busy';
     const moves = (this.animations && this.animations.moves) || {};
     const actions = moves.actions || [];
@@ -778,7 +775,7 @@ class PetSprite {
     const H = Math.max(1, Number(VIEW.h) || 1);
     const dpx = Math.abs(c.cx * W - this.currentCenterX());
     const dpy = Math.abs(c.cy * H - this.currentCenterY());
-    if (dpx < 12 && dpy < 12) return 'here';
+    if (dpx < 12 && dpy < 12) { console.log('[dsh-pet][诊断] walkTo 判定「已在目标附近」→ here（返回 true 但不会位移）dpx=' + dpx.toFixed(1) + ' dpy=' + dpy.toFixed(1)); return 'here'; }
     this.stopMove(); // 先停掉正在进行的漫游/旧指路（否则 tryMove 的占用判断会拦下）
     if (this.throwRef !== null) this.stopThrow();
     const pool = actions.filter((a) => !this.animations.turn.includes(a.name));
@@ -794,6 +791,7 @@ class PetSprite {
       tailSec: Number(mp.tailSec) || 0,
       legs: 0,
     };
+    console.log('[dsh-pet][诊断] walkTo 选定动画=' + chosen.name + '，目标比例 cx/cy=' + c.cx.toFixed(3) + '/' + c.cy.toFixed(3) + '，当前像素中心=' + this.currentCenterX().toFixed(1) + '/' + this.currentCenterY().toFixed(1));
     this.startWalkLeg();
     return true;
   }
@@ -1033,7 +1031,8 @@ class PetSprite {
 
   // [local patch D] 鼠标接近 → 转头看向光标（+ 配置了 animations.gaze 时补一个动作）。
   // 渲染端只有在指针悬停命中区时才收得到 mousemove，光标在别处时拿不到位置，
-  // 所以位置由主进程 60ms 轮询后经 pet:cursor 推来（见 main.js 的 cursor-broadcast 补丁）。
+  // 所以位置由主进程轮询后经 pet:cursor 推来（见 main.js 的 cursor-broadcast 与
+  // pointer-idle-backoff 补丁：有输入时 60ms 一推，光标静止后退避到 ~250ms）。
   hookGazeCursor() {
     if (!window.petBridge || typeof window.petBridge.onCursor !== 'function') return;
     window.petBridge.onCursor((p) => this.onCursorAt(p));
@@ -1372,18 +1371,20 @@ class PetSprite {
     const info = this.speechInfo();
     const mood = this.moodLabels(); // [local patch H] 性格 / 活跃度的当前值（本地状态，同步可得）
     const pc = this.pcLabels(); // [local patch P] 权限设置当前状态
-    const vo = this.voiceLabels(); // [local patch V] 语音模式当前状态
-    this.refreshVoiceMics(); // [local patch V] 顺手刷一下麦克风名字（异步、不弹权限框；名字要授权后才有）
     const tts = this.ttsLabels(); // [local patch T] 语音输出当前状态
     // [local patch E6] 本地文本模型清单（只读；最多等 1.2s，取不到就只显示兜底两项）
     const tm = await this.textModelMenuInfo();
-    // 桌面专属工具根项（打开网站 / 查看余额 / 碎碎念 / 对话 / 回到初始位置）+ 共享菜单树（动作→分类→具体动画）
+    // 桌面专属工具根项（查看余额 / 碎碎念 / 对话 / 回到初始位置）+ 共享菜单树（动作→分类→具体动画）
     // 碎碎念/对话项无条件显示：手动触发不受 whisperEnabled 限制（该字段只影响自动周期轮询）
-    const tools = [{ label: '打开网站', action: 'open-site' }];
+    const tools = [];
     if (this.pet.balanceEnabled) tools.push({ label: '查看余额', action: 'show-balance' });
     tools.push(
       { label: '碎碎念', action: 'whisper' },
       { label: '对话', action: 'chat' },
+      // [local patch W2] 今天天气：Open-Meteo 免费源（不用 Key），气泡 + 朗读，雪天/高温顺手演一段
+      { label: '今天天气', action: 'weather:now' },
+      // [local patch S2] 设置面板：右键直达控制台（已开着时只聚焦，不会开出第二个）
+      { label: '设置面板', action: 'console' },
       // [local patch B] 子菜单标题直接带状态：不展开也知道现在是开是关（点不点都得看得见）
       { label: '实时监测桌面' + tag(on.running ? '开着' : '关着'), children: [
         { label: mark(on.running) + '开始监控', action: 'watch:start' },
@@ -1467,13 +1468,6 @@ class PetSprite {
         { label: '· 她最近做了什么', action: 'perm:log' },
         { label: '· 没授权时她会明说，不会硬来', action: 'perm:noop' },
       ] },
-      // [local patch Z] 录屏（OBS）：说「打开录屏」就打开 OBS 并开始录，说「停止」就停。
-      // 菜里点等于主人亲口吩咐（不会被语音听错），所以菜单这条路不再走权限闸门。
-      { label: '录屏（OBS）', children: [
-        { label: '开始录屏（顺手打开 OBS）', action: 'perm:rec-start' },
-        { label: '停止录屏', action: 'perm:rec-stop' },
-        { label: '· 文件按 OBS 自己的设置保存', action: 'perm:noop' },
-      ] },
       // [local patch M2] 走到某处：以前她只会原地不动（parseIntent 不认「移动到左边」这类话）
       { label: '走到哪边', children: [
         { label: '走到左边', action: 'perm:move:left' },
@@ -1484,29 +1478,6 @@ class PetSprite {
         { label: '走到你光标那儿', action: 'perm:move:cursor' },
         { label: '回到原来的位置', action: 'perm:move:home' },
         { label: '· 也可以直接对她说「到左边去」', action: 'perm:noop' },
-      ] },
-      // [local patch V] 语音模式：本机离线转写（默认关；开着才要麦克风权限）
-      { label: '语音模式' + (vo.on ? ' · 开着' : ''), children: [
-        { label: mark(vo.on) + (vo.on ? '关掉语音模式' : '开启语音模式'), action: 'voice:' + (vo.on ? 'off' : 'on') },
-        { label: '灵敏度 · ' + vo.sensText, children: [
-          { label: mark(vo.sens === 'low') + '低（要大声点）', action: 'voice:sens:low' },
-          { label: mark(vo.sens === 'mid') + '中（默认）', action: 'voice:sens:mid' },
-          { label: mark(vo.sens === 'high') + '高（小声也听得见）', action: 'voice:sens:high' },
-        ] },
-        { label: '识别语言 · ' + vo.langText, children: [
-          { label: mark(vo.lang === 'zh') + '中文（推荐）', action: 'voice:lang:zh' },
-          { label: mark(vo.lang === 'auto') + '自动（噪声多时会猜成韩文/日文）', action: 'voice:lang:auto' },
-        ] },
-        { label: '麦克风 · ' + vo.micText, children: [
-          { label: mark(!vo.micId) + '默认麦克风（跟随系统）', action: 'voice:mic:' },
-          ...vo.mics.map((m, i) => ({ label: mark(vo.micId === m.id) + m.label, action: 'voice:mic:' + i })),
-          { label: '· ' + vo.micHint, action: 'voice:noop' },
-        ] },
-        { label: '麦克风自检（3 秒）' + (vo.testing ? ' · 正在测' : ''), action: 'voice:selftest' },
-        { label: '· ' + vo.hint, action: 'voice:noop' },
-        { label: '· 只在本机转写，不上传、不联网', action: 'voice:noop' },
-        { label: '· 太轻的段落我不硬猜，会先提醒你', action: 'voice:noop' },
-        { label: '· 自检会把这段录音留在 voice-selftest.wav（方便诊断），平时不留', action: 'voice:noop' },
       ] },
       // [local patch T] 语音输出：联网朗读（念出的文字会发给微软朗读服务）
       { label: '语音输出' + (tts.on ? ' · 开着' : ' · 关着'), children: [
@@ -1523,12 +1494,12 @@ class PetSprite {
         { label: '试听一句', action: 'tts:try' },
         { label: tts.hint, action: 'tts:noop' },
       ] },
-      // [local patch X] 清理缓存：只清她自己生成的截屏/日志/临时录音 + 浏览器缓存（**只手动**，没有定时）
+      // [local patch X] 清理缓存：只清她自己生成的截屏/冒烟截图 + 浏览器缓存（**只手动**，没有定时）
       { label: '清理缓存' + this.cacheLabels().lastText, children: [
         { label: '立即清理', action: 'cache:clean' },
         { label: '看看能清多少', action: 'cache:info' },
         { label: '· ' + this.cacheLabels().histText, action: 'cache:noop' },
-        { label: '· 只清：截屏 / 语音日志 / 自检录音 / 临时录音 / 冒烟截图 / 浏览器缓存', action: 'cache:noop' },
+        { label: '· 只清：截屏 / 冒烟截图 / 浏览器缓存', action: 'cache:noop' },
         { label: '· 不动：人设、设置、权限记录、聊天记忆', action: 'cache:noop' },
       ] },
       { label: '回到初始位置', action: 'home' },
@@ -1564,10 +1535,6 @@ class PetSprite {
   onMenuAction(leaf) {
     this.closeMenu();
     if (!leaf || typeof leaf !== 'object') return;
-    if (leaf.action === 'open-site') {
-      if (window.petBridge) window.petBridge.openDshSite(ORIGIN); // 系统默认浏览器打开（等效 Ctrl+点击链接）
-      return;
-    }
     if (leaf.action === 'show-balance') {
       this.showBalanceFromMenu(); // 立即拉余额并展示（无需等 1s 触发轮询，展示路径与周期触发一致）
       return;
@@ -1578,6 +1545,11 @@ class PetSprite {
     }
     if (leaf.action === 'chat') {
       this.showChatFromMenu(); // 打开对话弹窗（记忆经 host /chat 读写，浏览器/桌面同一实例共享）
+      return;
+    }
+    // [local patch S2] 设置面板：拉起/聚焦控制台窗口
+    if (leaf.action === 'console') {
+      this.openConsole();
       return;
     }
     if (leaf.action === 'home') {
@@ -1609,11 +1581,6 @@ class PetSprite {
       this.runPermAction(leaf.action.slice(5));
       return;
     }
-    // [local patch V] 语音模式开关 / 灵敏度
-    if (typeof leaf.action === 'string' && leaf.action.indexOf('voice:') === 0) {
-      this.runVoiceAction(leaf.action.slice(6));
-      return;
-    }
     // [local patch T] 语音输出（TTS）：开关 / 音色 / 语速 / 音量 / 什么时候说话 / 试听
     if (typeof leaf.action === 'string' && leaf.action.indexOf('tts:') === 0) {
       this.runTtsAction(leaf.action.slice(4));
@@ -1622,6 +1589,11 @@ class PetSprite {
     // [local patch X] 清理缓存（手动）
     if (typeof leaf.action === 'string' && leaf.action.indexOf('cache:') === 0) {
       this.runCacheAction(leaf.action.slice(6));
+      return;
+    }
+    // [local patch W2] 今天天气（Open-Meteo，免费无 Key）
+    if (typeof leaf.action === 'string' && leaf.action.indexOf('weather:') === 0) {
+      this.runWeatherAction(leaf.action.slice(8));
       return;
     }
     // [local patch E6] 本地文本模型：本地状态（存 localStorage），点了立刻生效，不经过 host
@@ -1920,6 +1892,41 @@ class PetSprite {
     } catch (e) {
       this.showWhisper('清理缓存的时候出错了…（' + String((e && e.message) || e) + '）');
     }
+  }
+
+  // [local patch W2] 天气城市：localStorage（与语音/权限同一套路）；留空 = IP 自动定位
+  weatherKey() { return 'dsh-pet-weather-main'; }
+
+  /** [local patch W2] 今天天气：主进程拉 Open-Meteo（免费无 Key），气泡 + 朗读（notice 类，跟随「语音输出」开关）。
+   *  动画只挑现成素材：雪天堆雪人、≥33℃ 摇扇纳凉（用户素材包删了就自动跳过）；
+   *  指路/行走进行中只说话不抢动画（与 showWhisper 的让路同语义，别重演"气泡有了人没动"）。 */
+  runWeatherAction() {
+    const bridge = window.petBridge;
+    if (!bridge || typeof bridge.weatherGet !== 'function') { this.showWhisper('天气这条路没接上…（重启一下我就好）'); return; }
+    let city = '';
+    try {
+      const raw = JSON.parse(window.localStorage.getItem(this.weatherKey()) || 'null');
+      if (raw && typeof raw.city === 'string') city = raw.city.trim();
+    } catch (e) { city = ''; } // 坏值当没设城市，别让它挡住天气
+    const moving = !!(this.walkPlan || this.pendingMove);
+    bridge.weatherGet(city).then((r) => {
+      if (!r || r.ok !== true) {
+        this.showWhisper('我这边连不上天气服务…' + (r && r.error ? '（' + r.error + '）' : '') + '过会儿再试试？');
+        return;
+      }
+      const bits = [(r.city || '本地') + '现在' + r.cond + '，' + Math.round(r.temp) + '℃'];
+      if (typeof r.tmin === 'number' && typeof r.tmax === 'number') bits.push('今天 ' + Math.round(r.tmin) + '~' + Math.round(r.tmax) + '℃');
+      if (r.windText) bits.push(r.windText);
+      if (r.stale && r.ageSec > 60) bits.push('这是 ' + Math.round(r.ageSec / 60) + ' 分钟前的旧数据');
+      this.showWhisper(bits.join('，') + '。');
+      if (moving) return;
+      const names = [];
+      for (const c of (this.animations.categories || [])) for (const a of (c.actions || [])) names.push(a);
+      if ([71, 73, 75, 77, 85, 86].indexOf(r.code) >= 0 && names.indexOf('堆雪人') >= 0) this.playOnce('堆雪人');
+      else if (r.temp >= 33 && names.indexOf('摇扇纳凉') >= 0) this.playOnce('摇扇纳凉');
+    }).catch((e) => {
+      this.showWhisper('天气这条路出错了…（' + String((e && e.message) || e) + '）');
+    });
   }
 
   closeMenu() {
@@ -2636,8 +2643,6 @@ class PetSprite {
       /* localStorage 不可用 → 保持"全关"（安全侧默认） */
     }
     window.__dshPetOnChatSend = (text) => this.onChatSendIntercept(text);
-    this.recOn = false; // [local patch Z] 她是不是在录屏（只当本地缓存用，真值以主进程为准）
-    void this.refreshRecStatus(); // 开局问一次：好让"停止"这种光杆口令也能被认出来
   }
 
   savePerm() {
@@ -2661,93 +2666,6 @@ class PetSprite {
     console.log('[dsh-pet] 权限动作：' + text);
   }
 
-  // ===== [local patch Z] 录屏（OBS）：说「打开录屏」→ 开 OBS 起录；说「停止」→ 停 =====
-  // 为什么必须抢在 parseIntent **之前**判：「打开录屏」会被那条正则当成"要找名叫『录屏』的软件"
-  // （必然 not-found）；而「开始录制」根本不匹配它（"开始"不在那条正则的动词表里）。
-  parseRecIntent(text) {
-    const t = String(text || '').trim().replace(/[\s，。！？、,.!?~～:：;；"'「」]/g, '');
-    if (!t || t.length > 40) return null;
-    const NOUN = /(录屏|录制|录像|录影|录相|录视频|录下来|录个屏|录一下|录一段|屏幕录制|荧幕录制|录音)/;
-    const STOP = /(停止|停下|停一下|停了|停掉|结束|别录|不要录|不录|关掉|关闭|收工)/;
-    const ASK = /(什么|怎么|为啥|为什么|吗|呢|教程|设置|在哪)/;
-    // 只说「打开 OBS」不算录屏意图（那走下面 parseIntent 去开软件）；带"录"字才算。
-    const recish = NOUN.test(t) || (/obs/i.test(t) && /录/.test(t)) || (/录/.test(t) && STOP.test(t));
-    if (recish) {
-      if (ASK.test(t)) return null; // 「录屏怎么用」这类问句绝不当命令
-      if (STOP.test(t)) return { action: 'stop' };
-      return { action: 'start' }; // 提到了录屏又没说要停 → 就是要开
-    }
-    // 没提"录屏"二字的纯口令：只有她**确实在录**时才当停止（否则"停止"会去抢别的动作的活）
-    if (this.recOn === true && /^(停止|停下|停一下|停了|停|结束|别录了|不录了|收工|可以了|好了)[吧呀啊呗啦]?$/.test(t)) {
-      return { action: 'stop' };
-    }
-    return null;
-  }
-
-  /** 只读问主进程：OBS 在不在、有没有在录。失败一律吞掉（当"不知道"）。 */
-  async refreshRecStatus() {
-    if (!window.petBridge || typeof window.petBridge.recStatus !== 'function') return null;
-    try {
-      const r = await window.petBridge.recStatus();
-      if (r && r.ok === true) {
-        this.recOn = !!r.recording;
-        return r;
-      }
-    } catch {
-      /* 不知道就算了 */
-    }
-    return null;
-  }
-
-  /** 真正去开/停 OBS：路径/端口/密码全在主进程，这里只说动作、只收结果。 */
-  async execRec(action) {
-    if (!window.petBridge || typeof window.petBridge.recStart !== 'function') {
-      return { ok: false, why: 'bridge-missing', reply: '我这边没有录屏通道，做不了…' };
-    }
-    const ERR_HINT = {
-      'ws-disabled': 'OBS 里的 WebSocket 服务端没开——OBS 里「工具 → WebSocket 服务器设置」勾上"启用"就行',
-      'no-ws-config': '没读到 OBS 的 websocket 配置，OBS 是不是装在别的地方？',
-      'obs-exe-not-found': '我没找到 OBS 装在哪儿',
-      'obs-start-timeout': 'OBS 起来了但一直没准备好，可能有个窗口在等你点一下',
-      'started-but-not-active': 'OBS 起来了但没能开始录',
-      'record-not-started': 'OBS 起来了但没能开始录',
-    };
-    if (action === 'stop') {
-      let r = null;
-      try {
-        r = await window.petBridge.recStop();
-      } catch (e) {
-        r = { ok: false, error: String((e && e.message) || e) };
-      }
-      if (r && r.ok === true) {
-        this.recOn = false;
-        if (r.already) return { ok: true, reply: '本来就没在录呀～' };
-        const p = String(r.path || '').replace(/\\/g, '/');
-        const name = p ? p.split('/').pop() : '';
-        return {
-          ok: true,
-          reply: '好，停下来了～' + (name ? '录像存成「' + name + '」了，位置就是 OBS 里设的那个。' : '录像按 OBS 自己的设置存好了。'),
-        };
-      }
-      const err = String((r && r.error) || 'unknown');
-      if (err === 'obs-not-running' || err === 'no-ws-config') return { ok: true, reply: 'OBS 现在没开着，也没在录呢～' };
-      return { ok: false, why: err, reply: '没能停下来…（' + (ERR_HINT[err] || err) + '）' };
-    }
-    let r = null;
-    try {
-      r = await window.petBridge.recStart();
-    } catch (e) {
-      r = { ok: false, error: String((e && e.message) || e) };
-    }
-    if (r && r.ok === true) {
-      this.recOn = true;
-      if (r.already) return { ok: true, reply: '本来就在录着啦～' };
-      return { ok: true, reply: r.startedObs ? '我把 OBS 打开、开始录啦～' : '开始录啦～' };
-    }
-    const err = String((r && r.error) || 'unknown');
-    return { ok: false, why: err, reply: '没能开始录…（' + (ERR_HINT[err] || err) + '）' };
-  }
-
   // ===== [local patch M2] 听懂"指路" =====
   // 为什么要有它：parseIntent 只认「打开/启动/运行…」，「移动到左边」匹配不上 → 掉进普通聊天，
   // 模型回一句"好呀"而人站在原处（主人说的"不太智能"就是这个）。
@@ -2762,7 +2680,6 @@ class PetSprite {
     if (/(什么|怎么|为啥|为什么|能不能|可不可以|行不行|吗|呢|教程|设置|在哪|哪儿)/.test(t)) return null;
     // 「打开/启动…」是 parseIntent 的地盘
     if (/^(?:帮我|给我|替我|麻烦|请)?(?:打开|启动|运行|开一下|开个|开启|播放|关闭|关掉)/.test(t)) return null;
-    if (/录屏|录制|录像/.test(t)) return null; // 录屏刚在前面判过，这里再兜一层
     // 「过来」＝走到光标那儿
     if (/^(?:快点?|赶紧|马上|立刻|现在)?(?:过来|过来这边|来这边|来我这边|到我这边|来我这儿|来我这|来我身边)[吧呀啊呗啦]?$/.test(t)) {
       return { place: 'cursor' };
@@ -2792,6 +2709,21 @@ class PetSprite {
     const vert = hasT ? 'top' : hasB ? 'bottom' : '';
     if (!horiz && !vert) return null;
     return { place: vert ? (horiz ? vert + '-' + horiz : vert) : horiz };
+  }
+
+  // [local patch S2] 打开控制台（设置面板）：渲染端只发 IPC，找 launcher / spawn 都在主进程做。
+  // launcher 自带单实例锁，已在跑时主进程那次 spawn 会自己退出并把已有窗口带到前台。
+  openConsole() {
+    if (!window.petBridge || typeof window.petBridge.openConsole !== 'function') return;
+    // 失败路径才有声：找不到 launcher 时主进程回 {ok:false} → 气泡告知；invoke 被拒（无 handler
+    // 等）走 catch 进日志。正常路径零输出。
+    void window.petBridge
+      .openConsole()
+      .then((r) => {
+        if (r && r.ok) return;
+        this.showWhisper('控制台找不到了…去安装目录双击「可爱大肥鱼桌宠」吧');
+      })
+      .catch((e) => console.error('[dsh-pet] 打开控制台失败：' + (e && e.message ? e.message : e)));
   }
 
   /** 真正走过去：位移交给她本来就有的行走驱动（跟动画同步、逐帧移窗口）。 */
@@ -2829,7 +2761,7 @@ class PetSprite {
   }
 
   /* ===== [local patch voice-targets@1] 口语归一 + 目标分类 =====
-   * 主人对着麦克风说的话和打字不一样：句尾常被识别成「吧/呀/啊」，动词也常在后面
+   * 主人打字的说法常带口语：句尾常有「吧/呀/啊」，动词也常在后面
    * （「帮我把B站打开」）。这里把这两种说法**挪成原来那条正则认识的写法**，
    * 于是"已调好的口语适配"一个字都不用动，新说法自动走同一条路。
    * 分类（网址 / 本机文件夹或文件 / 软件名）只看 targets.js 一份规则。 */
@@ -2881,19 +2813,6 @@ class PetSprite {
 
   async onChatSendIntercept(text) {
     this.ttsStop(); // [local patch T] 主人又说话了：立刻停掉旧朗读队列
-    // [local patch Z] 录屏意图最先判（"打开录屏"会被下面的 parseIntent 当成找软件）
-    const rec = this.parseRecIntent(text);
-    if (rec) {
-      // 起录＝让她去开软件，要「允许她打开软件」的权限；**停止不需要权限**——
-      // 录着的时候拒绝"停止"只会让录像一直录下去，那是更坏的结果。
-      if (rec.action === 'start' && !this.perm.app) {
-        this.noteAction('被拒绝（未授权"允许她打开软件"）：开始录屏');
-        return { ok: true, reply: '录屏要先开「允许她打开软件」的权限～右键我 → 权限设置 里勾一下就行。', ts: Date.now() };
-      }
-      const rr = await this.execRec(rec.action);
-      this.noteAction((rr.ok ? '成功：' : '失败：') + (rec.action === 'start' ? '开始录屏' : '停止录屏') + (rr.ok ? '' : '（' + rr.why + '）'));
-      return { ok: true, reply: rr.reply, ts: Date.now() };
-    }
     // [local patch M2] 指路：得抢在 parseIntent 之前（那条正则根本不认「移动到左边」）
     const mv = this.parseMoveIntent(text);
     if (mv) {
@@ -2990,15 +2909,6 @@ class PetSprite {
       this.setPerm(parts[1], parts[2] === 'on');
       return;
     }
-    // [local patch Z] 菜单里点「开始/停止录屏」＝主人亲口吩咐（不会被语音听错），不再走权限闸门
-    if (cmd === 'rec-start' || cmd === 'rec-stop') {
-      const action = cmd === 'rec-start' ? 'start' : 'stop';
-      void this.execRec(action).then((r) => {
-        this.noteAction((r.ok ? '成功：' : '失败：') + (action === 'start' ? '开始录屏（菜单）' : '停止录屏（菜单）') + (r.ok ? '' : '（' + r.why + '）'));
-        this.showWhisper(r.reply);
-      });
-      return;
-    }
     if (cmd === 'log') {
       const last = this.permLog.slice(0, 5).map((x) => new Date(x.t).toTimeString().slice(0, 5) + ' ' + x.text);
       this.showWhisper(last.length ? '我最近做的：' + last.join('；') : '我还没替主人做过什么。');
@@ -3078,864 +2988,9 @@ class PetSprite {
   }
 
 
-  // ===== [local patch V] 语音模式：复用本机 SenseVoice **离线**转写（不联网、不上传音频）=====
-  // 链路：麦克风(16k) → RMS VAD 切句 → 主进程 node worker 转写 → 她先复述听到的话
-  //       → 同一个 parseIntent/onChatSendIntercept 通道（与打字完全同一套，两边不会跑偏）。
-  // 默认关：开着才向主进程申请麦克风权限；关掉立刻停轨道、关 AudioContext。
-  voiceKey() {
-    return 'dsh-pet-voice-' + this.pet.id;
-  }
-
-  voiceSensTable() {
-    return { low: 0.022, mid: 0.012, high: 0.006 };
-  }
-
-  voiceThreshold(sens) {
-    const t = this.voiceSensTable();
-    return t[sens] || t.mid;
-  }
-
-  /** [local patch V] 强度闸门阈值（A 段）：比 VAD 阈值**高一个量级**，而且三档各不相同。
-   *  VAD 那条线只回答"算不算一句话"，闸门这条线回答"值不值得送引擎"：
-   *  实测主人那 36 段里失败段落的峰值 rms 是 0.012–0.045，成功的是 0.16–0.306；
-   *  而引擎在低信噪比下**不会说"我不知道"**——SNR≈−6dB 时它会把底噪认成
-   *  「你好了直接获得的能量。」这种"像话但不是人话"的句子（tools/worker-lang-probe.mjs 实测）。 */
-  voiceMinRms(sens) {
-    return { low: 0.08, mid: 0.05, high: 0.03 }[sens] || 0.05;
-  }
-
-  /** [local patch V] 送引擎前的软件增益（B 段）：把段落峰值拉到 TARGET，最多 CAP 倍，
-   *  **只放大、绝不衰减**（够响的段落 gain = 1 原样送走），放大后逐样本削顶在 ±1 内。
-   *  返回 { samples, gain }，gain 保留两位小数并如实记进日志——不然"为什么这次认出来了"没法复盘。 */
-  voiceApplyGain(samples, rms) {
-    const TARGET = 0.15;
-    const CAP = 8;
-    const peak = Number(rms) || 0;
-    const want = peak > 0 ? TARGET / peak : 1;
-    const gain = Math.max(1, Math.min(CAP, want));
-    if (!(gain > 1) || !samples || !samples.length) return { samples, gain: 1 };
-    const out = new Float32Array(samples.length);
-    for (let i = 0; i < samples.length; i++) {
-      const v = samples[i] * gain;
-      out[i] = v > 1 ? 1 : v < -1 ? -1 : v;
-    }
-    return { samples: out, gain: Math.round(gain * 100) / 100 };
-  }
-
-  hookVoiceMode() {
-    this.voiceState = { on: false, sens: 'mid', micId: '', micLabel: '', lang: 'zh', mics: [], testing: false, quietCount: 0, quietHinted: false, weakCount: 0, weakHinted: false, weakPeak: 0, noSpeechCount: 0, noSpeechHinted: false };
-    let legacyDefault = false; // 盘上存着 'default'（v5 的坑）→ 归一化后顺手清盘
-    try {
-      const raw = window.localStorage.getItem(this.voiceKey());
-      if (raw) {
-        const o = JSON.parse(raw);
-        if (o && o.sens && this.voiceSensTable()[o.sens]) this.voiceState.sens = o.sens;
-        // 选中的麦克风跟灵敏度存在**同一个**键里（不新建第三种存储）。
-        // v5 的坑：存盘里可能有字符串 'default'（那不是 deviceId）。它会一路走到
-        // getUserMedia({deviceId:{exact:'default'}})，失败后回落默认设备**还误报"设备不在了"**，
-        // 菜单也不打勾。归一化成 ''（跟随系统），并把盘上那个 'default' 清掉。
-        if (o && typeof o.micId === 'string') {
-          if (o.micId === 'default') {
-            legacyDefault = true; // micLabel 一起作废：它描述的是我们不再选的那个"设备"
-          } else {
-            this.voiceState.micId = o.micId;
-            if (typeof o.micLabel === 'string') this.voiceState.micLabel = o.micLabel;
-          }
-        }
-        // 识别语言也只认这两个值（默认 zh = 一直以来的行为），别的当没写
-        if (o && (o.lang === 'zh' || o.lang === 'auto')) this.voiceState.lang = o.lang;
-        // [local patch Z] 语音模式持久化：老代码 on 从不落盘，重启即静音
-        if (o && typeof o.on === 'boolean') this.voiceState.on = o.on;
-      }
-    } catch {
-      /* localStorage 不可用 → 用默认灵敏度（语音仍然默认关） */
-    }
-    if (legacyDefault) this.saveVoice(); // 只清那一个值：别的字段原样写回
-    this.voice = null; // 运行时对象（AudioContext / MediaStream / VAD），只有开着时才有
-  }
-
-  saveVoice() {
-    try {
-      const st = this.voiceState || {};
-      window.localStorage.setItem(
-        this.voiceKey(),
-        JSON.stringify({ on: !!st.on, sens: st.sens, micId: st.micId || '', micLabel: st.micLabel || '', lang: st.lang === 'auto' ? 'auto' : 'zh' }),
-      );
-    } catch {
-      /* 同上 */
-    }
-  }
-
-  voiceLabels() {
-    const st = this.voiceState || {};
-    const sens = st.sens || 'mid';
-    const text = { low: '低（要大声点）', mid: '中', high: '高（小声也听得见）' }[sens] || '中';
-    const on = !!st.on;
-    const mics = Array.isArray(st.mics) ? st.mics : [];
-    const sel = st.micId || '';
-    const lang = st.lang === 'auto' ? 'auto' : 'zh';
-    return {
-      on,
-      sens,
-      sensText: text,
-      lang,
-      langText: lang === 'auto' ? '自动' : '中文',
-      hint: on ? '听完停一下，我就接话' : '开着才用麦克风（本机转写）',
-      micId: sel,
-      micLabel: st.micLabel || '',
-      micText: sel ? st.micLabel || '已选的设备' : '默认',
-      // 一个名字都没枚举到时（还没授权），说清楚为什么看不到名字 —— 别拿 deviceId 冒充设备名
-      micHint: mics.length ? '选中的那个才是我要听的声音' : '先点下面的自检授权一次才能看到设备名',
-      mics,
-      testing: !!st.testing,
-    };
-  }
-
-  /** [local patch V] 日志里的设备标识：真名（label）优先；只有 deviceId 时只取**尾 6 位**，
-   *  绝不把整条 deviceId 记进盘（那是设备指纹，没必要留）。 */
-  voiceMicTag(track) {
-    // Chromium 给"默认设备"的名字前面挂着 'Default - '（主人盘上的日志就长成
-    // "Default - 麦克风 (AULA-G7Pro V2) (38a6:0021"）—— **先剥前缀再截 40 字**，
-    // 否则 40 字的额度全被那层前缀和尾部乱码吃掉，设备名主干反而看不见了。
-    const label = String((track && track.label) || '').trim().replace(/^Default\s*-\s*/i, '');
-    if (label) return label.slice(0, 40);
-    let id = '';
-    try {
-      if (track && typeof track.getSettings === 'function') id = String((track.getSettings() || {}).deviceId || '');
-    } catch {
-      id = '';
-    }
-    if (!id) id = String((this.voiceState && this.voiceState.micId) || '');
-    return id ? '…' + id.slice(-6) : '默认麦克风';
-  }
-
-  /** [local patch V] 把麦克风列表刷进 voiceState.mics（异步，**不弹权限框**：enumerateDevices 不要授权）。
-   *  还没授权时 label 全是空串 —— 那时一个名字都不列（菜单只留「默认麦克风」+ 一句"先点自检"），
-   *  拿到权限后名字自然就出来了。 */
-  async refreshVoiceMics() {
-    const st = this.voiceState;
-    if (!st) return [];
-    const md = navigator.mediaDevices;
-    if (!md || typeof md.enumerateDevices !== 'function') {
-      st.mics = [];
-      return st.mics;
-    }
-    let devs = null;
-    try {
-      devs = await md.enumerateDevices();
-    } catch {
-      devs = null; // 枚举失败就当没有：绝不因此报错、更不影响说话
-    }
-    const out = [];
-    const seen = {};
-    for (const d of devs || []) {
-      if (!d || d.kind !== 'audioinput') continue;
-      const id = String(d.deviceId || '');
-      const label = String(d.label || '').trim();
-      if (!id || !label || seen[id]) continue;
-      seen[id] = 1;
-      out.push({ id, label: label.slice(0, 40) });
-    }
-    st.mics = out;
-    return out;
-  }
-
-  /** [local patch V] 选中一个麦克风：arg = ''（跟随系统）或列表下标。
-   *  下标越界时**什么都不做**（列表换代了宁愿不动，也不许选到一个猜出来的设备）。
-   *  正在听的时候换设备：先停干净再重开，绝不两条流同时跑。 */
-  setVoiceMic(arg) {
-    const st = this.voiceState;
-    if (!st) return false;
-    let id = '';
-    let label = '';
-    if (arg !== '' && arg !== null && arg !== undefined) {
-      const i = Number(arg);
-      const m = Number.isInteger(i) && i >= 0 ? (st.mics || [])[i] : null;
-      if (!m) return false;
-      id = m.id;
-      label = m.label;
-    }
-    st.micId = id;
-    st.micLabel = label;
-    this.saveVoice();
-    if (st.on) {
-      this.stopVoiceMode(); // 换设备 = 重开一次（立刻生效）
-      this.startVoiceMode();
-      return true;
-    }
-    this.showWhisper('好，麦克风用「' + (label || '默认设备') + '」。');
-    return true;
-  }
-
-  /** [local patch V] 识别语言：'zh'（默认）或 'auto'。为什么需要这个开关：实测（tools/voice-lang-probe.mjs）
-   *  **同一段底噪**——zh 出「嗯。」，auto 出「그.」（韩文）；主人盘上那几条韩文垃圾就是这么来的。
-   *  默认 zh = 沿用现在的行为，auto 只留给"确实想让它自己判语言"的人。
-   *  换语言不重启 worker：下一句把新语言带过去，worker 自己把引擎换掉（冷启 ~2.5s，只一次）。 */
-  setVoiceLang(lang) {
-    const want = lang === 'auto' ? 'auto' : 'zh';
-    const st = this.voiceState;
-    if (!st) return false;
-    const changed = st.lang !== want;
-    st.lang = want;
-    this.saveVoice();
-    if (!changed) return true;
-    this.showWhisper('好，识别语言：' + (want === 'auto' ? '自动（噪声多的时候会猜成韩文/日文）' : '中文') + '（下一句生效）');
-    return true;
-  }
-
-  /** [local patch V] 开麦：优先用**选中的那个设备**；它不在了（拔了/改名了）就回落默认，
-   *  并且如实说一句（不许静默换设备 —— 主人会以为她听的是自己挑的那个）。 */
-  async voiceOpenMic() {
-    const md = navigator.mediaDevices;
-    const id = String((this.voiceState && this.voiceState.micId) || '');
-    const base = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-    if (id) {
-      try {
-        const stream = await md.getUserMedia({ audio: Object.assign({ deviceId: { exact: id } }, base) });
-        return { stream, fellBack: false };
-      } catch {
-        /* 设备不在了 → 往下走默认设备 */
-      }
-    }
-    const stream = await md.getUserMedia({ audio: base });
-    return { stream, fellBack: !!id };
-  }
-
-  voiceRms(chunk) {
-    let s = 0;
-    for (let i = 0; i < chunk.length; i++) s += chunk[i] * chunk[i];
-    return chunk.length ? Math.sqrt(s / chunk.length) : 0;
-  }
-
-  voiceVadNew(sens) {
-    // rms = 这一段的**峰值**（诊断用：麦克风到底送没送进来声音，看它就够了）
-    return { thr: this.voiceThreshold(sens), speaking: false, chunks: [], samples: 0, quietMs: 0, ms: 0, voicedMs: 0, rms: 0, lastDrop: null };
-  }
-
-  voiceConcat(chunks, n) {
-    const out = new Float32Array(n);
-    let at = 0;
-    for (const c of chunks) {
-      out.set(c, at);
-      at += c.length;
-    }
-    return out;
-  }
-
-  voiceVadFinish(st, reason) {
-    const out = this.voiceConcat(st.chunks, st.samples);
-    const ms = Math.round((out.length / 16000) * 1000);
-    const voicedMs = Math.round(st.voicedMs || 0);
-    const rms = st.rms || 0;
-    st.speaking = false;
-    st.chunks = [];
-    st.samples = 0;
-    st.quietMs = 0;
-    st.ms = 0;
-    st.voicedMs = 0;
-    st.rms = 0;
-    // 丢太短的一句：判的是**真的有人声**的时长（voicedMs），不是"人声+尾巴静音"的总长，
-    // 否则一声咳嗽会带着 0.9s 静音凑够 1.2s 被当成一句话送去转写（踩过）。
-    if (voicedMs < 300 || ms < 300) {
-      // 被丢掉也要留下现场（丢在哪、多长、多响）—— 主人说"没反应"时，这里是最常见的断点。
-      // 用 st.lastDrop 而不是改返回值：voiceVadPush 的契约（null=还没说完）一个字都不动。
-      st.lastDrop = { dropped: 'too-short', ms, voicedMs, rms };
-      return null;
-    }
-    st.lastDrop = null;
-    return { samples: out, ms, voicedMs, rms, reason };
-  }
-
-  /** 喂一帧 PCM（Float32Array）：null = 还没说完；{samples,ms,voicedMs,rms,reason} = 一句说完了。
-   *  被丢掉的那一段在 st.lastDrop 里（dropped:'too-short'）—— 返回值契约不变，老调用方不受影响。 */
-  voiceVadPush(st, chunk, frameMs) {
-    const frame = frameMs || Math.round((chunk.length / 16000) * 1000);
-    const rms = this.voiceRms(chunk);
-    if (rms > (st.rms || 0)) st.rms = rms; // 峰值：段落丢了也留得下"当时多响"
-    st.ms += frame;
-    if (rms > st.thr) {
-      st.speaking = true;
-      st.quietMs = 0;
-      st.voicedMs = (st.voicedMs || 0) + frame;
-    } else if (st.speaking) {
-      st.quietMs += frame;
-    }
-    if (!st.speaking) return null;
-    st.chunks.push(chunk);
-    st.samples += chunk.length;
-    if (st.quietMs >= 900) return this.voiceVadFinish(st, 'silence'); // 安静 0.9s = 一句说完了
-    if (st.ms >= 12000) return this.voiceVadFinish(st, 'timeout'); // 说太久：12s 硬切，别一直听着
-    return null;
-  }
-
-  async startVoiceMode() {
-    if (this.voiceState && this.voiceState.on) return true; // 幂等：开着再点不会重复开麦
-    const bridge = window.petBridge;
-    if (!bridge || typeof bridge.setVoiceMode !== 'function' || typeof bridge.voiceTranscribe !== 'function') {
-      this.showWhisper('我这边的语音通道没加载，用不了语音模式…');
-      return false;
-    }
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-      this.showWhisper('这个窗口不支持录音，语音模式开不了…');
-      return false;
-    }
-    // 先告诉主进程「语音模式开着」，主进程才会放行 media 权限（默认一律拒绝）
-    await bridge.setVoiceMode(true);
-    let got = null;
-    try {
-      got = await this.voiceOpenMic(); // 用选中的设备；它不在了就回落默认（下面如实说一句）
-    } catch (e) {
-      await bridge.setVoiceMode(false);
-      this.showWhisper('麦克风没有权限，我开不了语音模式…（在系统设置里允许麦克风再试）');
-      return false;
-    }
-    const stream = got.stream;
-    try {
-      const ctx = new AC({ sampleRate: 16000 });
-      const src = ctx.createMediaStreamSource(stream);
-      const proc = ctx.createScriptProcessor(4096, 1, 1);
-      const track = stream.getAudioTracks ? stream.getAudioTracks()[0] : null;
-      const st = {
-        ctx,
-        stream,
-        proc,
-        src,
-        vad: this.voiceVadNew(this.voiceState.sens),
-        busy: false,
-        device: this.voiceMicTag(track), // 日志里记哪个设备（真名优先）
-        talked: false, // 这一轮到底有没有听到过人声
-        silentTicks: 0,
-        timer: null,
-      };
-      this.voiceState.quietCount = 0; // 每次开麦重数（上次的静音账不带到这一次）
-      this.voiceState.quietHinted = false;
-      this.voiceState.weakCount = 0; // 「连续太轻」同理：每次开麦重新数
-      this.voiceState.weakHinted = false;
-      this.voiceState.weakPeak = 0;
-      proc.onaudioprocess = (e) => {
-        if (!this.voice || this.voice !== st) return;
-        const buf = e.inputBuffer.getChannelData(0);
-        const chunk = new Float32Array(buf.length);
-        chunk.set(buf);
-        const frameMs = Math.round((chunk.length / 16000) * 1000);
-        if (this.voiceRms(chunk) > st.vad.thr) st.talked = true;
-        const done = this.voiceVadPush(st.vad, chunk, frameMs);
-        if (!done) {
-          // 被 VAD 丢掉的那一段（人声不足 300ms）也要落盘：主人说"没反应"最常断在这里
-          const drop = st.vad.lastDrop;
-          if (drop) {
-            st.vad.lastDrop = null;
-            this.voiceNoteSegment({ dropped: drop.dropped, device: st.device, rms: drop.rms, voicedMs: drop.voicedMs });
-          }
-          return;
-        }
-        if (st.busy) return; // 上一句还在转写/回话 → 不做新的一句，避免插队
-        st.busy = true;
-        this.voiceHandlePcm(done.samples, { device: st.device, rms: done.rms, voicedMs: done.voicedMs }).finally(() => {
-          st.busy = false;
-        });
-      };
-      src.connect(proc);
-      proc.connect(ctx.destination); // ScriptProcessor 必须连到输出才会被驱动（不写就是静音）
-      if (ctx.state === 'suspended' && typeof ctx.resume === 'function') await ctx.resume();
-      this.voice = st;
-      this.voiceState.on = true;
-      this.saveVoice(); // [local patch E6] 开了就落盘（配合 hookVoiceMode 的读回 = 重启后能自己开回来）
-      // 每 10 秒看一眼：开着麦却一点人声都没进来，就得让主人知道（并且记进日志）
-      st.timer = setInterval(() => this.voiceSilenceTick(st), 10000);
-      if (got.fellBack) {
-        this.showWhisper('选中的麦克风「' + (this.voiceState.micLabel || '之前选的那个') + '」没找到（可能被拔了），我用了默认设备。');
-      } else {
-        this.showWhisper('语音模式开着啦～说完停一下，我听到会先复述一遍。');
-      }
-      return true;
-    } catch (e) {
-      try {
-        if (stream) for (const t of stream.getTracks()) t.stop();
-      } catch {
-        /* 已经停了 */
-      }
-      await bridge.setVoiceMode(false);
-      this.showWhisper('麦克风起来了但音频管线没建起来…（' + String((e && e.message) || e) + '）');
-      return false;
-    }
-  }
-
-  stopVoiceMode() {
-    const st = this.voice;
-    this.voice = null;
-    if (this.voiceState) this.voiceState.on = false;
-    this.saveVoice(); // [local patch E6] 关了也落盘（否则重启后又自己开回来）
-    if (!st) return false;
-    try {
-      if (st.timer) clearInterval(st.timer); // 心跳定时器必须停：窗口销毁后不许再回调
-    } catch {
-      /* 定时器已经没了 */
-    }
-    try {
-      if (st.stream) for (const t of st.stream.getTracks()) t.stop();
-    } catch {
-      /* 已经停了 */
-    }
-    try {
-      if (st.proc) {
-        st.proc.onaudioprocess = null;
-        st.proc.disconnect();
-      }
-      if (st.src) st.src.disconnect();
-      if (st.ctx && typeof st.ctx.close === 'function') st.ctx.close();
-    } catch {
-      /* 上下文已经关了 */
-    }
-    const bridge = window.petBridge;
-    if (bridge && typeof bridge.setVoiceMode === 'function') bridge.setVoiceMode(false);
-    return true;
-  }
-
-  setVoiceSens(sens) {
-    if (!this.voiceSensTable()[sens]) return;
-    this.voiceState.sens = sens;
-    if (this.voice) this.voice.vad = this.voiceVadNew(sens); // 换灵敏度立刻生效（丢掉半句）
-    this.saveVoice();
-    this.showWhisper('好，语音灵敏度：' + this.voiceLabels().sensText + '。');
-  }
-
-  voiceErrText(r) {
-    const why = (r && r.error) || '';
-    if (why === 'no-node-runtime') return '本机语音引擎不可用：没找到 node 运行时…';
-    if (why === 'worker-missing') return '本机语音引擎不可用：worker 脚本不在…';
-    if (why === 'worker-timeout') return '转写超时了，没听出来…';
-    if (why === 'empty-audio') return '没听清…再说一遍嘛。';
-    return '本机语音引擎没转写成功…（' + why + '）';
-  }
-
-  async voiceHandlePcm(samples, seg) {
-    const bridge = window.petBridge;
-    const at = { device: (seg && seg.device) || '默认麦克风', rms: (seg && seg.rms) || 0, voicedMs: (seg && seg.voicedMs) || 0 };
-    if (!bridge || typeof bridge.voiceTranscribe !== 'function') {
-      this.showWhisper('本机语音引擎不可用，我听不了…');
-      this.voiceNoteSegment({ device: at.device, rms: at.rms, voicedMs: at.voicedMs, dropped: 'no-engine' });
-      return null;
-    }
-    // [local patch V] A. 强度闸门：**送引擎之前**先看这一段够不够响。不够响就一个字都不送。
-    //    为什么非有不可：引擎对低信噪比输入不会说"我不知道"，它会**硬造**一句中文
-    //    （实测 SNR≈−6dB 把底噪认成「你好了直接获得的能量。」）——主人盘上"她答非所问"就是这么来的。
-    const min = this.voiceMinRms(this.voiceState && this.voiceState.sens);
-    if (!(Number(at.rms) >= min)) {
-      this.voiceNoteTooQuiet(at, min);
-      return null;
-    }
-    if (this.voiceState) {
-      // 通过闸门 = 这一轮确实听到有人说话了：把"连续太轻"的计数清零
-      this.voiceState.weakCount = 0;
-      this.voiceState.weakPeak = 0;
-    }
-    // [local patch V] B. 软件增益（只放大、封顶 8 倍、削顶保护），增益值如实记进日志
-    const boosted = this.voiceApplyGain(samples, at.rms);
-    let r = null;
-    try {
-      r = await bridge.voiceTranscribe(boosted.samples, (this.voiceState && this.voiceState.lang) || 'zh');
-    } catch (e) {
-      r = { ok: false, error: String((e && e.message) || e) };
-    }
-    if (!r || !r.ok) {
-      this.showWhisper(this.voiceErrText(r));
-      this.voiceNoteSegment({ device: at.device, rms: at.rms, voicedMs: at.voicedMs, gain: boosted.gain, dropped: 'engine:' + String((r && r.error) || 'unknown') });
-      return null;
-    }
-    // [local patch V] C. v6 第二道网：worker 里的 Silero VAD 说"这一段没有真人说话" ⇒ 一个字都不转写。
-    //    它和上面的强度闸门是两道不同的网：闸门挡"太轻"，VAD 挡"够响但不是人声"
-    //    （底噪、键盘声、空调声 —— 主人盘上那些 rms 0.06~0.12 的垃圾段正属于这一类）。
-    const speechMs = r.speechMs === null || r.speechMs === undefined ? null : Math.round(Number(r.speechMs) || 0);
-    if (r.dropped === 'no-speech') {
-      this.voiceNoteNoSpeech(at, speechMs);
-      return null;
-    }
-    const heard = this.fixNames(String(r.text || '').trim());
-    if (!heard) {
-      this.showWhisper('没听清…再说一遍嘛。');
-      this.voiceNoteSegment({ device: at.device, rms: at.rms, voicedMs: at.voicedMs, gain: boosted.gain, speechMs, dropped: 'empty-text' });
-      return null;
-    }
-    // [local patch V] D. 文本兜底：引擎偶尔在"确实有一点人声"的段落上吐一句纯标点
-    //    （主人盘上有一条 rms 0.0793 的段落，引擎只回了「。」）。判据是**既没有中日韩文字、
-    //    也没有 ASCII 字母数字**；**绝不能用"长度<2"** —— 那会把「好」「嗯」「QQ」一起误杀。
-    if (!this.voiceHasWords(heard)) {
-      this.showWhisper('这一句我只听到点杂音…你再说一遍嘛。');
-      this.voiceNoteSegment({ device: at.device, rms: at.rms, voicedMs: at.voicedMs, gain: boosted.gain, speechMs, heard, dropped: 'garbage' });
-      return null;
-    }
-    this.ttsKind('heard'); // [local patch T] 复述主人自己的话：只出气泡，不朗读
-    this.showWhisper('我听到：「' + heard + '」'); // 先说听到的：听错了主人当场能看出来（**原样**带标点，不做任何裁剪）
-    let route = null;
-    try {
-      route = await this.voiceRouteText(heard); // 削标点/拆分句只发生在路由内部：复述给主人的永远是引擎原文
-    } catch (e) {
-      this.voiceNoteSegment({ device: at.device, rms: at.rms, voicedMs: at.voicedMs, gain: boosted.gain, speechMs, heard, dropped: 'route-error' });
-      return null;
-    }
-    this.voiceNoteSegment({ device: at.device, rms: at.rms, voicedMs: at.voicedMs, gain: boosted.gain, speechMs, heard, route: route && route.route });
-    return route;
-  }
-
-  /** [local patch V] v6 第三件事：这句话里到底有没有"字"。
-   *  中日韩文字（含假名/谚文）或 ASCII 字母数字 ⇒ 有；纯标点/空白/emoji ⇒ 没有。
-   *  为什么不用"长度<2"：主人会说「好」「嗯」，用户也会说「QQ」「OK」—— 那些是真话，不能丢。 */
-  voiceHasWords(text) {
-    return /[\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AFa-zA-Z0-9]/.test(String(text || ''));
-  }
-
-  /** [local patch V] v6：Silero VAD 判"这一段里没有真人说话"。**照样记盘**
-   *  （dropped: 'no-speech' 外加 speechMs —— 0 就是一点人声都没有，比 rms 更能说明问题），
-   *  连续 3 段才提醒一次；和"太轻"分开计数、分开文案（一个是信号弱，一个是根本没人在说）。 */
-  voiceNoteNoSpeech(at, speechMs) {
-    const st = this.voiceState || (this.voiceState = { on: false, sens: 'mid' });
-    this.voiceNoteSegment({ device: at.device, rms: at.rms, voicedMs: at.voicedMs, speechMs, dropped: 'no-speech' });
-    st.noSpeechCount = (st.noSpeechCount || 0) + 1;
-    if (st.noSpeechCount < 3 || st.noSpeechHinted) return false;
-    st.noSpeechHinted = true;
-    this.showWhisper('我一直没听到人声（连着几段都被本机 VAD 判成噪声了）——靠近点说，或者右键我 → 语音模式 → 麦克风，换个麦克风试试。');
-    return true;
-  }
-
-  /** [local patch V] A 段闸门拦下的一段：**照样记盘**（dropped: 'too-quiet'），
-   *  连续 3 段才提醒一次（和"完全没听到人声"分开计数、分开文案：这里是有声但太轻，
-   *  量出来的 rms 就是证据，所以提醒里直接报数字，并且给出可执行的三条建议）。 */
-  voiceNoteTooQuiet(at, min) {
-    const st = this.voiceState || (this.voiceState = { on: false, sens: 'mid' });
-    this.voiceNoteSegment({ device: at.device, rms: at.rms, voicedMs: at.voicedMs, dropped: 'too-quiet' });
-    st.weakCount = (st.weakCount || 0) + 1;
-    st.weakPeak = Math.max(Number(st.weakPeak) || 0, Number(at.rms) || 0);
-    if (st.weakCount < 3 || st.weakHinted) return false;
-    st.weakHinted = true;
-    const num = String(Number((Number(st.weakPeak) || 0).toFixed(3)));
-    this.showWhisper(
-      '你的麦克风信号太轻了（最近几段峰值只有 ' + num + '，我要 ' + min + ' 以上才敢送识别，硬送的话我会瞎猜）——' +
-        '离麦近一点说，或者右键我 → 语音模式：把灵敏度调高一级、或换一个带麦的耳机。' +
-        '我查过了，Windows 里这个麦的音量已经开到 94%，不是系统音量的问题。',
-    );
-    return true;
-  }
-
-  /** [local patch V] 把「一段的结果」落盘：识别原文、走了哪条路、被丢掉的原因、送引擎前放大了几倍。
-   *  为什么非记不可：主人说"我说了话她没反应"时，盘上必须有现场 —— 麦克风送没送进来声音、
-   *  引擎报没报错、听成了什么，全在这一行里。**失败也要记，绝不留白**（这次报障就是一条记录都没有）。 */
-  voiceNoteSegment(info) {
-    const st = this.voiceState || (this.voiceState = { on: false, sens: 'mid' });
-    const seg = info || {};
-    const heard = seg.heard ? String(seg.heard).slice(0, 200) : null;
-    const entry = {
-      ts: Date.now(),
-      device: String(seg.device || '默认麦克风').slice(0, 40),
-      rms: Number(seg.rms) || 0,
-      voicedMs: Math.round(Number(seg.voicedMs) || 0),
-      // v6：Silero VAD 判出的"真语音"毫秒数（0 = 一句人声都没有）。没测过就 null —— 不是 0。
-      speechMs: seg.speechMs === null || seg.speechMs === undefined ? null : Math.round(Number(seg.speechMs) || 0),
-      // B 段软件增益：没放大过就是 1（如实记录，别让"这一段为什么认出来了"无从复盘）
-      gain: Number(seg.gain) > 0 ? Math.round(Number(seg.gain) * 100) / 100 : 1,
-      heard,
-      route: seg.route === 'intent' || seg.route === 'chat' ? seg.route : 'none',
-      dropped: seg.dropped ? String(seg.dropped) : null,
-    };
-    // 「连续 3 段听不到人声」只数**确实没听到人声**的段落；引擎坏了不算（那时她说的是另一句话）
-    if (heard) this.voiceNoteHeard();
-    else if (entry.dropped === 'too-short' || entry.dropped === 'empty-text' || entry.dropped === 'no-voice') this.voiceNoteSilence();
-    const bridge = window.petBridge;
-    if (bridge && typeof bridge.voiceLog === 'function') {
-      try {
-        bridge.voiceLog(entry); // 只上报：写不写得进盘是主进程的事，绝不能因此打断说话
-      } catch {
-        /* 日志失败不影响语音链路 */
-      }
-    }
-    return entry;
-  }
-
-  /** [local patch V] 一连 3 段没听到人声 ⇒ 提示一次（每次开麦最多一次）。
-   *  这正是主人报的「我说了话她没反应」最常见的现场：不是她不理，是麦克风根本没送进来人声。 */
-  voiceNoteSilence() {
-    const st = this.voiceState;
-    if (!st) return false;
-    st.quietCount = (st.quietCount || 0) + 1;
-    if (st.quietCount < 3 || st.quietHinted) return false;
-    st.quietHinted = true;
-    this.showWhisper('我一直没听到你的声音……右键我 → 语音模式 → 麦克风，换一个设备试试。');
-    return true;
-  }
-
-  voiceNoteHeard() {
-    const st = this.voiceState;
-    if (!st) return false;
-    st.quietCount = 0; // 听到过就重新数
-    st.noSpeechCount = 0; // VAD 那条线也一样：真听到人声就重新数
-    return true;
-  }
-
-  /** [local patch V] 开着麦却一点人声都没进来时的心跳（每 10 秒一条）+ 数「连续 3 段」。
-   *  没有它，麦克风彻底没声时盘上**一条都不会有**（这次报障正是如此），
-   *  事后根本分不清是"她从没开过麦"还是"开了、但麦克风没送进来声音"。 */
-  voiceSilenceTick(st) {
-    if (!this.voice || this.voice !== st) {
-      try {
-        clearInterval(st.timer);
-      } catch {
-        /* 定时器已经没了 */
-      }
-      return;
-    }
-    if (st.talked) {
-      st.silentTicks = 0; // 这一轮听到过声音 → 不算"一直没听到"
-      return;
-    }
-    st.silentTicks = (st.silentTicks || 0) + 1;
-    this.voiceNoteSegment({ dropped: 'no-voice', device: st.device, rms: st.vad ? st.vad.rms : 0, voicedMs: 0 });
-  }
-
-  /** [local patch V] 麦克风自检（3 秒）：用**选中的那个设备**录 3 秒 → 转写 → 说出听到的原文。
-   *  为什么要有它：① 授权一次以后 enumerateDevices 才有真名字（否则菜单里只有「默认麦克风」）；
-   *  ② 主人说"没反应"时，一眼分得清是麦克风没声还是引擎不认。
-   *  两条铁律：**不依赖语音模式开关**（借一下权限，测完原样还回去，不留开着的麦）；
-   *  **只复述、绝不走意图通道**（自检不该打开任何东西）。任何情况都必须有句话。 */
-  async voiceSelfTest() {
-    const st = this.voiceState;
-    if (!st || st.testing) return { ok: false, reason: 'busy' }; // 自检进行中再点不重复
-    const bridge = window.petBridge;
-    if (!bridge || typeof bridge.voiceTranscribe !== 'function') {
-      this.showWhisper('我这边的语音通道没加载，自检做不了…');
-      return { ok: false, reason: 'no-bridge' };
-    }
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-      this.showWhisper('这个窗口不支持录音，自检做不了…');
-      return { ok: false, reason: 'no-audio' };
-    }
-    const wasOn = !!st.on;
-    st.testing = true;
-    // 自检也要麦克风权限，而主进程只认「语音模式开着」——借一下，测完还回去
-    if (!wasOn && typeof bridge.setVoiceMode === 'function') await bridge.setVoiceMode(true);
-    let stream = null;
-    let ctx = null;
-    let proc = null;
-    let src = null;
-    const chunks = [];
-    let total = 0;
-    let peak = 0;
-    let loud = 0;
-    const thr = this.voiceThreshold(st.sens);
-    try {
-      const got = await this.voiceOpenMic();
-      stream = got.stream;
-      const track = stream.getAudioTracks ? stream.getAudioTracks()[0] : null;
-      const tag = this.voiceMicTag(track);
-      ctx = new AC({ sampleRate: 16000 });
-      src = ctx.createMediaStreamSource(stream);
-      proc = ctx.createScriptProcessor(4096, 1, 1);
-      if (ctx.state === 'suspended' && typeof ctx.resume === 'function') await ctx.resume();
-      if (got.fellBack) this.showWhisper('选中的麦克风没找到（可能被拔了），自检先用默认设备。');
-      this.showWhisper('自检开始：对着麦克风说点什么，3 秒…');
-      await new Promise((resolve) => {
-        let done = false;
-        const finish = () => {
-          if (done) return;
-          done = true;
-          resolve();
-        };
-        proc.onaudioprocess = (e) => {
-          const buf = e.inputBuffer.getChannelData(0);
-          const chunk = new Float32Array(buf.length);
-          chunk.set(buf);
-          const rms = this.voiceRms(chunk);
-          if (rms > peak) peak = rms;
-          if (rms > thr) loud++;
-          chunks.push(chunk);
-          total += chunk.length;
-          if (total / 16000 >= 3) finish(); // 录满 3 秒
-        };
-        src.connect(proc);
-        proc.connect(ctx.destination); // 不连输出就不会被驱动（跟语音模式同一个坑）
-        setTimeout(finish, 3400); // 兜底：音频回调一直不来（麦克风没在送数据）也要收尾，不能把她挂在这儿
-      });
-      this.voiceCloseTest(stream, ctx, proc, src);
-      if (!wasOn && typeof bridge.setVoiceMode === 'function') await bridge.setVoiceMode(false);
-      st.testing = false;
-      // [local patch V] D. 自检留录音：**原始**（还没加增益）的这段 PCM 覆盖写到固定路径。
-      //    放在所有判断之前 —— 连"一点声音都没收到"的自检也要留下证据，主人可以自己听到底有没有声。
-      //    路径由主进程写死（voiceSelfTestPath），渲染端给不了文件名。
-      if (total && typeof bridge.voiceSelfTestWav === 'function') {
-        try {
-          await bridge.voiceSelfTestWav(this.voiceConcat(chunks, total));
-        } catch {
-          /* 留不下录音不影响自检结论 */
-        }
-      }
-      // "一点声音都没收到"判的是**信号本身**（几乎为零），不是灵敏度阈值：
-      // 阈值是"算不算一句话"的线，不是"麦克风有没有在工作"的线。
-      if (!total || peak < 0.002) {
-        this.showWhisper('一点声音都没收到…麦克风「' + tag + '」好像没在工作（右键我 → 语音模式 → 麦克风，换一个试试）。');
-        this.voiceNoteSegment({ dropped: 'selftest-silent', device: tag, rms: peak, voicedMs: 0 });
-        return { ok: false, reason: 'silent' };
-      }
-      // [local patch V] A 段闸门在自检里同样生效：太轻的样本**不送引擎**（送过去它只会硬猜），
-      // 但要把量到的 rms 明说，并指路"灵敏度调高一级 / 离麦近一点 / 换带麦的耳机"。
-      const minRms = this.voiceMinRms(st.sens);
-      if (peak < minRms) {
-        this.showWhisper(
-          '自检收到的声音太轻了（峰值 rms ' + String(Number(peak.toFixed(3))) + '，低于当前灵敏度要的 ' + minRms + '）——' +
-            '我没把它送去识别（硬送我会瞎猜）。录音我留在 voice-selftest.wav 了，你可以自己听听；' +
-            '也可以把灵敏度调高一级，或者换一个带麦的耳机。',
-        );
-        this.voiceNoteSegment({ dropped: 'selftest-quiet', device: tag, rms: peak, voicedMs: loud * 256 });
-        return { ok: false, reason: 'too-quiet', rms: peak };
-      }
-      // 过了闸门 → 和正常链路同一套增益 + 同一个语言开关（自检要能复现真实链路的行为）
-      const boosted = this.voiceApplyGain(this.voiceConcat(chunks, total), peak);
-      let r = null;
-      try {
-        r = await bridge.voiceTranscribe(boosted.samples, st.lang === 'auto' ? 'auto' : 'zh');
-      } catch (e) {
-        r = { ok: false, error: String((e && e.message) || e) };
-      }
-      if (!r || !r.ok) {
-        this.showWhisper('转写引擎出错了…（' + this.voiceErrText(r) + '）');
-        this.voiceNoteSegment({ dropped: 'selftest-engine', device: tag, rms: peak, voicedMs: loud * 256, gain: boosted.gain });
-        return { ok: false, reason: 'engine' };
-      }
-      const heard = this.fixNames(String(r.text || '').trim());
-      if (!heard) {
-        this.showWhisper('有声音，可是一个字都没认出来…再说一句试试？');
-        this.voiceNoteSegment({ dropped: 'selftest-empty', device: tag, rms: peak, voicedMs: loud * 256, gain: boosted.gain });
-        return { ok: false, reason: 'empty' };
-      }
-      this.showWhisper('我听到的是：「' + heard + '」'); // 自检**只复述**：不走意图通道，不打开任何东西
-      this.voiceNoteSegment({ heard, device: tag, rms: peak, voicedMs: loud * 256, gain: boosted.gain });
-      return { ok: true, text: heard };
-    } catch (e) {
-      this.voiceCloseTest(stream, ctx, proc, src);
-      st.testing = false;
-      if (!wasOn && typeof bridge.setVoiceMode === 'function') await bridge.setVoiceMode(false);
-      this.showWhisper('麦克风起来了但录音没跑起来…（' + String((e && e.message) || e) + '）');
-      return { ok: false, reason: 'error' };
-    }
-  }
-
-  /** [local patch V] 自检收尾：停轨道、断节点、关上下文（顺序跟 stopVoiceMode 一致）。 */
-  voiceCloseTest(stream, ctx, proc, src) {
-    try {
-      if (stream) for (const t of stream.getTracks()) t.stop();
-    } catch {
-      /* 已经停了 */
-    }
-    try {
-      if (proc) {
-        proc.onaudioprocess = null;
-        proc.disconnect();
-      }
-      if (src) src.disconnect();
-      if (ctx && typeof ctx.close === 'function') ctx.close();
-    } catch {
-      /* 上下文已经关了 */
-    }
-  }
-
-  /** [local patch V] 削掉**首尾**的标点与空白（中间一个字都不动）。
-   *  为什么非削不可：STT 引擎必定补全角句号（说「帮我打开软件」回来的是「帮我打开软件。」），
-   *  而 parseIntent 会把这个句号当成目标名的一部分（what 是「软件。」）——
-   *  拿着这种名字去开软件只会白跑一趟，所以削标点必须在进意图链路之前做。 */
-  voiceStripPunct(text) {
-    return String(text || '')
-      .replace(/^[\s。！？，、；：…～!?,.;:~「」『』“”‘’"']+/, '')
-      .replace(/[\s。！？，、；：…～!?,.;:~「」『』“”‘’"']+$/, '');
-  }
-
-  /** [local patch V] 按分句切开（每个分句各自削首尾标点）：
-   *  「帮我打开浏览器，然后播放一首歌。」→ 先拿第一句「帮我打开浏览器」去试。
-   *  一个分隔符都没有时，返回的就是「整句削过标点」那一句本身。 */
-  voiceClauses(text) {
-    return String(text || '')
-      .split(/[，,、;；]/)
-      .map((s) => this.voiceStripPunct(s))
-      .filter(Boolean);
-  }
-
-  /** [local patch V] 拿一段文字去试打字那条拦截通道：真命中意图（返回 ok）才算数。
-   *  语音链路**只有这一处**真的调用 onChatSendIntercept —— 意图、权限、操作审计全用打字那一套，不另写一份。 */
-  async voiceTryIntent(text) {
-    const handled = await this.onChatSendIntercept(text);
-    return handled && handled.ok === true ? handled : null;
-  }
-
-  /** 识别出来的话走**和打字完全同一条**意图通道（parseIntent / onChatSendIntercept）。
-   *  语音只多两步，而且两步都只决定「拿哪段文字去试」，拦截与权限判定仍然是同一套：
-   *    ① 先削首尾标点：引擎必定补「。」，而 parseIntent 会把这个句号当成目标名的一部分
-   *       （「帮我打开软件。」→ what 是「软件。」），不削就等于拿着一个错名字去开软件；
-   *    ② 再按分句依次试：「帮我打开浏览器，然后播放一首歌。」里的逗号同样会被 parseIntent
-   *       整个吞进目标名（what 变成「浏览器，然后播放一首歌」），所以**必须先分句再试**：
-   *       取第一句能认的分句去执行（一句话里说了几件事，先做能做的第一件）。
-   *  一个分句都没命中 ⇒ 跟以前一模一样，原样丢给正常对话：绝不吞话、不误路由。 */
-  async voiceRouteText(text) {
-    this.ttsKind('chat'); // [local patch T] 语音对话的回复按「回复我时」处理
-    const raw = String(text || '');
-    let handled = null;
-    for (const c of this.voiceClauses(raw)) {
-      // 没有分隔符时这里就是「整句削过标点」那一句本身，行为跟以前完全一致
-      handled = await this.voiceTryIntent(c);
-      if (handled) break; // 第一句能认的就赢了，后面的分句不再试（一句话只做一件事）
-    }
-    if (handled) {
-      this.showWhisper(handled.reply);
-      return { ok: true, route: 'intent' }; // 命中就只说这一件，不再把整句丢给 /chat
-    }
-    this.chatReplyPending(); // [发布版补丁 A8] 语音问话同样要优先回（与弹窗那条路一致）
-    try {
-      const r = await this.postWatch('/chat', { text: raw }, 60000); // [local patch W] 出话给足 60s（本机推理模型 5s+，2.5s 必超时）
-      const reply = r && typeof r.reply === 'string' ? r.reply : '';
-      if (reply) this.showWhisper(reply);
-      return { ok: !!reply, route: 'chat' };
-    } catch (e) {
-      this.showWhisper('我听到了，可是没连上说话的那头…');
-      return { ok: false, route: 'chat' };
-    } finally {
-      this.chatReplyDone(); // [发布版补丁 A8b]
-    }
-  }
-
-  runVoiceAction(cmd) {
-    if (cmd === 'on') {
-      this.startVoiceMode();
-      return;
-    }
-    if (cmd === 'off') {
-      const was = this.stopVoiceMode();
-      if (was) this.showWhisper('语音模式关啦，麦克风也停了。');
-      return;
-    }
-    if (cmd === 'sens:low' || cmd === 'sens:mid' || cmd === 'sens:high') {
-      this.setVoiceSens(cmd.slice(5));
-      return;
-    }
-    if (cmd.indexOf('mic:') === 0) {
-      // 'voice:mic:'（空）= 跟随系统；'voice:mic:0|1|…' = 列表里第几个设备
-      this.setVoiceMic(cmd.slice(4));
-      return;
-    }
-    if (cmd === 'lang:zh' || cmd === 'lang:auto') {
-      this.setVoiceLang(cmd.slice(5));
-      return;
-    }
-    if (cmd === 'selftest') {
-      this.voiceSelfTest(); // 自检自己会说话（成功/失败都有话），这里不等它
-      return;
-    }
-    /* voice:noop（信息行）：什么都不做 */
-  }
-
-
   /* ===== [local patch T] 语音输出（TTS）：联网朗读（方案见 tts-proto/TTS-SPEC.md）=========
    *  主进程本身就是 Node ⇒ 用 TLS 直连 Edge 朗读端点拿 mp3（不 spawn、不落盘），Buffer 由 preload
-   *  桥回渲染层 decodeAudioData 播放。这一块只管「什么时候说 / 怎么排队 / 失败怎么讲」。
-   *  回声门控**没有改补丁 V 的正文**（voice-mode 仍是 @4）：本补丁把 voiceVadPush 与 voiceRouteText
-   *  各包一层实例级 wrapper，落下 dropped:'tts-speaking' 与 dropped:'echo' 两种现场。 */
+   *  桥回渲染层 decodeAudioData 播放。这一块只管「什么时候说 / 怎么排队 / 失败怎么讲」。 */
 
   ttsKey() { return 'dsh-pet-tts-main'; }
   ttsDefaults() {
@@ -3943,13 +2998,22 @@ class PetSprite {
     return { on: true, voice: 'zh-CN-XiaoyiNeural', rate: '+0%', vol: 0.9, chat: true, notice: true, autotalk: false, sing: true };
   }
   ttsVoiceTable() {
+    // 端点当前全部 14 个中文音色（main.js TTS_VOICES 同一份名单的菜单视图；多出来的会回落默认）
     return [
       { id: 'zh-CN-XiaoyiNeural', label: '晓伊 · 活泼（默认）' },
       { id: 'zh-CN-XiaoxiaoNeural', label: '晓晓 · 温柔' },
       { id: 'zh-CN-YunxiNeural', label: '云希 · 男 · 阳光' },
       { id: 'zh-CN-YunxiaNeural', label: '云夏 · 男 · 可爱' },
+      { id: 'zh-CN-YunyangNeural', label: '云扬 · 男 · 新闻播音' },
+      { id: 'zh-CN-YunjianNeural', label: '云健 · 男 · 激情解说' },
       { id: 'zh-CN-liaoning-XiaobeiNeural', label: '小北 · 东北 · 幽默' },
       { id: 'zh-CN-shaanxi-XiaoniNeural', label: '小妮 · 陕西' },
+      { id: 'zh-HK-HiuMaanNeural', label: '晓曼 · 粤语 · 女' },
+      { id: 'zh-HK-HiuGaaiNeural', label: '晓佳 · 粤语 · 女' },
+      { id: 'zh-HK-WanLungNeural', label: '云龙 · 粤语 · 男' },
+      { id: 'zh-TW-HsiaoChenNeural', label: '晓臻 · 台湾腔 · 女' },
+      { id: 'zh-TW-HsiaoYuNeural', label: '晓雨 · 台湾腔 · 女' },
+      { id: 'zh-TW-YunJheNeural', label: '云哲 · 台湾腔 · 男' },
     ];
   }
   ttsRateTable() { return [{ label: '慢', v: '-15%' }, { label: '正常', v: '+0%' }, { label: '快', v: '+15%' }]; }
@@ -3958,7 +3022,7 @@ class PetSprite {
   /** 一次会话里的运行状态（token = 世代号：任何"别念了"都 +1，在途结果一律作废）。 */
   ttsEnsure() {
     if (!this.ttsState) {
-      this.ttsState = { token: 0, queue: [], pumping: false, playing: false, source: null, guard: null, ctx: null, own: [], cache: new Map(), muteMs: 0, kind: '', lastKind: '', suppress: 0,
+      this.ttsState = { token: 0, queue: [], pumping: false, playing: false, source: null, guard: null, ctx: null, cache: new Map(), kind: '', lastKind: '', suppress: 0,
         // 诊断字段（写进**同一个** localStorage 键，不新开键）：一次发言只写一次 last，segment 末再补一次 bytes
         diag: null, diagStarted: false, diagBytes: 0, diagT0: 0, diagText: '', diagVoice: '', diagErrWritten: false };
     }
@@ -4093,37 +3157,6 @@ class PetSprite {
     return out.filter((s) => s.replace(/\s+/g, '').length > 0);
   }
 
-  /** 回声检测用的归一化：去掉标点与空白，只留字。 */
-  ttsNorm(text) {
-    return String(text == null ? '' : text).replace(/[\s，。！？；：、,.!?;:~～"'“”‘’（）()\[\]【】…—-]/g, '');
-  }
-  /** 识别出来的是不是我 8 秒内刚说过的话（扬声器→麦克风的回声）。 */
-  ttsIsEcho(text) {
-    const st = this.ttsEnsure();
-    const heard = this.ttsNorm(text);
-    if (!heard || !st.own.length) return false;
-    const now = Date.now();
-    for (let i = st.own.length - 1; i >= 0; i--) {
-      const it = st.own[i];
-      if (now - it.ts > 8000) break;
-      const mine = this.ttsNorm(it.text);
-      if (!mine) continue;
-      if (mine === heard) return true;
-      // 识别常把整句裁短：够长的包含关系也算回声（太短的词不认，免得"好"被误杀）
-      if (heard.length >= 6 && (mine.indexOf(heard) >= 0 || heard.indexOf(mine) >= 0)) return true;
-    }
-    return false;
-  }
-  /** 记一笔"我念过这句话"：回声检测的唯一依据（时间戳 = 真的开始念的时刻）。 */
-  ttsNoteSpoken(text) {
-    const st = this.ttsEnsure();
-    const s = String(text == null ? '' : text).trim();
-    if (!s) return;
-    st.own.push({ ts: Date.now(), text: s });
-    if (st.own.length > 24) st.own = st.own.slice(-24);
-  }
-  ttsSpeakingNow() { return this.ttsSpeaking === true; }
-
   /** 包一层 showWhisper（必须在补丁 C 之后包：拿到的还是**整段原文**，切句由 TTS 自己来）。 */
   hookTtsSpeak() {
     if (this.ttsHooked || typeof this.showWhisper !== 'function') return;
@@ -4140,43 +3173,6 @@ class PetSprite {
       const kind = this.ttsInferKind(raw);
       try { this.ttsSpeak(say, kind); } catch (e) { console.info('[dsh-pet tts] 入队失败：' + String((e && e.message) || e)); }
       return shown;
-    };
-  }
-
-  /** 回声门控：不改补丁 V 的正文，只在它的两个入口上包实例级 wrapper。
-   *  ① voiceVadPush：我正在出声 ⇒ 这一帧（其实是扬声器里的我）整帧丢掉，VAD 归零；
-   *     等出声结束**按段**记一条 dropped:'tts-speaking'（不按帧刷屏）。
-   *  ② voiceRouteText：识别出来的是我 8 秒内刚说过的 ⇒ 记 dropped:'echo' 后不再路由。 */
-  hookTtsEchoGate() {
-    if (this.ttsGateHooked || typeof this.voiceVadPush !== 'function' || typeof this.voiceRouteText !== 'function') return;
-    this.ttsGateHooked = true;
-    const st = this.ttsEnsure();
-    const origVad = this.voiceVadPush.bind(this);
-    const origRoute = this.voiceRouteText.bind(this);
-    const dev = () => (this.voice && this.voice.device) || '默认麦克风';
-    this.voiceVadPush = (vad, chunk, frameMs) => {
-      if (this.ttsSpeakingNow()) {
-        st.muteMs = Math.round(st.muteMs + (Number(frameMs) || 0));
-        if (vad) {
-          // 半句也不能留：留了就会在我说完之后被拼成一句话送去识别
-          vad.lastDrop = null; vad.rms = 0; vad.speaking = false; vad.chunks = [];
-          vad.samples = 0; vad.quietMs = 0; vad.ms = 0; vad.voicedMs = 0;
-        }
-        return null;
-      }
-      if (st.muteMs > 0) {
-        const ms = st.muteMs;
-        st.muteMs = 0;
-        this.voiceNoteSegment({ dropped: 'tts-speaking', device: dev(), rms: 0, voicedMs: ms });
-      }
-      return origVad(vad, chunk, frameMs);
-    };
-    this.voiceRouteText = async (text) => {
-      if (this.ttsIsEcho(text)) {
-        this.voiceNoteSegment({ dropped: 'echo', device: dev(), rms: 0, voicedMs: 0, heard: String(text == null ? '' : text) });
-        return { ok: false, route: 'echo' };
-      }
-      return origRoute(text);
     };
   }
 
@@ -4290,14 +3286,13 @@ class PetSprite {
       // onended 在"放完"和"被 stop()"两种情况下都会来：只有"还是这一代"才算真的放完
       src.onended = () => {
         const fresh = st.token === token;
-        if (fresh) { st.playing = false; this.ttsSpeaking = false; }
+        if (fresh) { st.playing = false; }
         finish(fresh);
       };
       st.playing = true;
-      this.ttsSpeaking = true;
       st.source = src;
       // 兜底：音频设备被拔/上下文挂起时 onended 可能永远不来，按解码时长 + 1.5s 强行收尾
-      st.guard = window.setTimeout(() => { st.playing = false; this.ttsSpeaking = false; finish(false); }, Math.round((audio.duration || 0) * 1000) + 1500);
+      st.guard = window.setTimeout(() => { st.playing = false; finish(false); }, Math.round((audio.duration || 0) * 1000) + 1500);
       try { src.start(0); } catch (e) { this.ttsFailNotice('start: ' + String((e && e.message) || e)); finish(false); }
     });
   }
@@ -4323,7 +3318,6 @@ class PetSprite {
         const ok = await this.ttsPlayBuffer(got.buf, st, token);
         if (st.token !== token) return;
         if (!ok) return;
-        this.ttsNoteSpoken(got.cl);
       }
     } catch (e) {
       this.ttsFailNotice(e);
@@ -4331,7 +3325,6 @@ class PetSprite {
       st.pumping = false;
       if (st.token === token) {
         st.playing = false;
-        this.ttsSpeaking = false;
         // 段末补一次"这一整段的累计 mp3 字节数"（只有后面还有分句解出来时才会多写这一次）
         if (st.diagStarted) {
           const d = this.ttsDiag();
@@ -4351,7 +3344,6 @@ class PetSprite {
     st.queue.length = 0;
     st.kind = '';
     st.lastKind = '';
-    st.muteMs = 0;
     if (st.guard !== null) { window.clearTimeout(st.guard); st.guard = null; }
     if (st.source) {
       const s = st.source;
@@ -4359,7 +3351,6 @@ class PetSprite {
       try { s.stop(0); } catch (e) { /* 已经停了 */ }
     }
     st.playing = false;
-    this.ttsSpeaking = false;
   }
 
   /** 试听一句：不进气泡（菜单里点"试听"不该弹一句碎碎念）。 */

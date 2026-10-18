@@ -114,20 +114,7 @@ return JSON.stringify({ r, ms: Date.now() - t0 }).slice(0, 600);
 '@
 & $node "$w\tools\cdp-do.mjs" 9226 "$newpc\ask.js"
 
-Write-Host "=== 7. 语音环境变量（打包后 addon / 模型 / node 都指向包内）==="
-# 这里要 import 的是**装好的那份**里的 paths.mjs，所以路径得按本次隔离目录算出来
-$sa = "$inst\standalone"
-$saUrl = "file:///" + ($sa -replace '\\', '/')
-$pjs = @"
-import { resolvePaths, speechEnv, applyEnv } from "$saUrl/paths.mjs";
-const p = resolvePaths("$($sa -replace '\\', '/')");
-const env = {}; applyEnv(p, env);
-console.log(JSON.stringify({ userRoot: p.userRoot, dataRoot: p.dataRoot, speech: speechEnv(p), envKeys: Object.keys(env) }, null, 1));
-"@
-[System.IO.File]::WriteAllText("$newpc\_paths.mjs", $pjs, (New-Object System.Text.UTF8Encoding($false)))
-& $node "$newpc\_paths.mjs"
-
-Write-Host "=== 8. 停掉测试桌宠 + 关掉测试控制台 ==="
+Write-Host "=== 7. 停掉测试桌宠 + 关掉测试控制台 ==="
 Set-Content -Path "$newpc\stop.js" -Encoding UTF8 -Value @'
 document.getElementById("stop").click();
 await new Promise((r) => setTimeout(r, 4000));

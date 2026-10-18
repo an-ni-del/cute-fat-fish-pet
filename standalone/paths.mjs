@@ -60,11 +60,6 @@ export function resolvePaths(standaloneDir) {
     electronExe: join(root, "electron", "electron.exe"),
     appDir: join(root, "app"),
     runnerMain: join(standaloneDir, "main.mjs"),
-    // 语音包（随包分发）：sherpa 引擎 + SenseVoice 模型 + 真 node.exe
-    speechDir: join(root, "speech"),
-    sherpaAddon: join(root, "speech", "sherpa", "sherpa-onnx.node"),
-    sileroModel: join(root, "speech", "sensevoice", "models", "silero", "silero_vad.onnx"),
-    nodeExe: join(root, "node", "bin", "node.exe"),
   };
 }
 
@@ -102,26 +97,10 @@ export function seedUserData(paths) {
 export function applyEnv(paths, env = process.env) {
   env.DSH_HOME = paths.userRoot;
   if (!env.DSH_PET_ELECTRON_PATH && existsSync(paths.electronExe)) env.DSH_PET_ELECTRON_PATH = paths.electronExe;
-  for (const [k, v] of Object.entries(speechEnv(paths))) if (!env[k]) env[k] = v;
   return env;
 }
 
 /**
- * 语音输入那三样外挂的路径（stt-worker.mjs 只认这三个环境变量）：
- *   DSH_PET_SHERPA_ADDON  原生引擎 .node
- *   DSH_PET_SILERO_MODEL  VAD 模型
- *   DSH_SPEECH_DIR        <dir>\sensevoice\models 底下找识别模型
- * 外加 DSH_PET_NODE：SenseVoice 的 addon 在 Electron 里加载不了，必须用真 node.exe。
- */
-export function speechEnv(paths) {
-  const out = {};
-  if (existsSync(paths.sherpaAddon)) out.DSH_PET_SHERPA_ADDON = paths.sherpaAddon;
-  if (existsSync(paths.sileroModel)) out.DSH_PET_SILERO_MODEL = paths.sileroModel;
-  if (existsSync(paths.speechDir)) out.DSH_SPEECH_DIR = paths.speechDir;
-  if (existsSync(paths.nodeExe)) out.DSH_PET_NODE = paths.nodeExe;
-  return out;
-}
-
 /** 读「自动适配」结果（没有就返回 null） */
 export function readDeviceProfile(paths) {
   try {

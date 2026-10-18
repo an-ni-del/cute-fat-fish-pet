@@ -19,7 +19,7 @@ Everything below is either in this repository (source, scripts, commits) or a pu
 | Upstream | <https://github.com/PC2005-cloud/dsh-pet> |
 | What was imported | The whole package tree, unmodified, into `src/` |
 
-That import is the baseline for everything else. **232 of the 243 files in the published upstream package are still byte-identical**; the 11 that differ are listed one by one, with sizes and reasons, in [differences-from-upstream.md](differences-from-upstream.md).
+That import is the baseline for everything else. **225 of the 243 files in the published upstream package are still byte-identical**; the 18 that differ are listed one by one, with sizes and reasons, in [differences-from-upstream.md](differences-from-upstream.md).
 
 ### 2. Engine work on the imported copy — 2026-10-06 / 10-07
 
@@ -224,7 +224,7 @@ Then reproduce the acceptance run: install the setup silently into a scratch dir
 
 - No commit history from before 2026-10-08 exists: the project only got its own repository that day. Work done earlier is documented by the file-level evidence described in step 2, not by commits.
 - The upstream project is **not** claimed as this project's work: it is MIT-licensed code by PC2005-cloud, kept in-tree with attribution intact, and the exact per-file differences are published.
-- No claim is made that the 11 modified files are all "improvements" — the list, with sizes and hashes, is published so anyone can review them.
+- No claim is made that the 18 modified files are all "improvements" — the list, with sizes and hashes, is published so anyone can review them.
 
 ---
 
@@ -232,7 +232,7 @@ Then reproduce the acceptance run: install the setup silently into a scratch dir
 
 这份日志记录每一步的**目标 → 改动 → 验证 → 提交**，全部可自行核对：提交用 `git log`，验证用仓库里的 `build\check-release.mjs`、`verify.mjs`、`build\check-paths.mjs`、`build\verify-install.py`。
 
-- **起点**：上游 **dsh-pet 0.3.0**（PC2005-cloud，MIT），整树导入 `src/`；发布包 243 个文件里 **232 个至今逐字节未改**，11 个刻意修改（每个都有大小与原因，见 [differences-from-upstream.md](differences-from-upstream.md)），没有删掉上游任何文件，另有 3 个引擎文件（`obs-ctl.js`、`stt-worker.mjs`、`targets.js`）是本项目新增。
+- **起点**：上游 **dsh-pet 0.3.0**（PC2005-cloud，MIT），整树导入 `src/`；发布包 243 个文件里 **225 个至今逐字节未改**，18 个刻意修改（每个都有大小与原因，见 [differences-from-upstream.md](differences-from-upstream.md)），没有删掉上游任何文件，另有 3 个引擎文件（`obs-ctl.js`、`stt-worker.mjs`、`targets.js`）是本项目新增。
 - **2026-10-06 / 10-07**：让桌宠脱离 DSH Web UI 在普通 Windows 桌面上跑起来（单一模型 / 语速等改动；当时的两个 `*.bak-before-*` 备份文件名就是日期证据，它们已不在发布树里）。
 - **2026-10-08 04:03（`9743b8f`）**：1.0.0 —— 独立运行器、单 HTML 控制台、首次运行自动适配、绿色 zip 打包。
 - **05:46 / 05:52（`341f19b`、`ab8d89d`）**：NSIS 安装程序，免管理员、一路下一步。

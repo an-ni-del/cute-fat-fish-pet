@@ -129,22 +129,19 @@ GitHub 硬限制**单个文件 100 MB**（超过直接拒收），仓库建议 1
 | 文件 | 大小 |
 |---|---|
 | `electron\electron.exe` | 225 MB |
-| `speech\sensevoice\models\sensevoice-onnx\model.int8.onnx` | 239 MB |
-| `node\bin\node.exe` | 93 MB |
 
 所以：**仓库只放源码 / 脚本 / 安装器，成品 zip 与 exe 走 Release 附件**。
-`electron\`、`node\`、`speech\` 这三块（合起来约 690 MB）在仓库里只有定位脚本 `build\toolchain.mjs`；
+`electron\` 这块（约 347 MB）在仓库里只有定位脚本 `build\toolchain.mjs`；
 `stage\` 与 `release\` 都被 `.gitignore` 排除，`git status` 里看到它们冒出「未跟踪」就去检查 `.gitignore` 是不是被改了。
 
 ## 想从源码重建的人需要什么
 
-`src\` 就是完整源码（不再需要任何「蓝本目录」）。重建只差三块外部运行时，用 `node build\toolchain.mjs`
+`src\` 就是完整源码（不再需要任何「蓝本目录」）。重建只差一块外部运行时，用 `node build\toolchain.mjs`
 可以查现状，三种补齐方式（优先级从高到低）：
 
 1. 命令行：`node build\build.mjs --toolchain <一份已装好的 BlueHairMaid 目录>`，
-   或分别指 `--electron <目录>` / `--node <目录>` / `--speech <目录>`；
-2. 环境变量：`BLUEHAIRMAID_TOOLCHAIN` / `BLUEHAIRMAID_ELECTRON` / `_NODE` / `_SPEECH`
-   （语音包还可用 `BLUEHAIRMAID_SHERPA` + `BLUEHAIRMAID_STT_MODELS` 拼）；
+   也可以单独指 `--electron <目录>`；
+2. 环境变量：`BLUEHAIRMAID_TOOLCHAIN` / `BLUEHAIRMAID_ELECTRON`
 3. 常见安装位置：`%LOCALAPPDATA%\BlueHairMaid`、`%ProgramFiles%\BlueHairMaid`、`%USERPROFILE%\BlueHairMaid`。
 
 找不到不会静默跳过：`build\build.mjs` 会直接报错并说明缺哪块。
